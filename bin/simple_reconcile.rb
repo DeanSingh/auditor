@@ -36,6 +36,9 @@ class YoursTOCParser
             break if idx >= lines.length
             l = lines[idx]
 
+            # Stop at TOC entry separator (marks end of current entry)
+            break if l.match?(/^\+[-+]+\+/)
+
             # Extract header text from 3rd column
             if l.match?(/\|\s*[^|]*\|\s*[^|]*\|\s*([^|]+)\|/)
               text = l.match(/\|\s*[^|]*\|\s*[^|]*\|\s*([^|]+)\|/)[1].strip
@@ -73,6 +76,10 @@ class YoursTOCParser
             (i..i+5).each do |idx|
               break if idx >= lines.length
               l = lines[idx]
+
+              # Stop at TOC entry separator
+              break if l.match?(/^\+[-+]+\+/)
+
               if l.match?(/\|\s*[^|]*\|\s*[^|]*\|\s*([^|]+)\|/)
                 text = l.match(/\|\s*[^|]*\|\s*[^|]*\|\s*([^|]+)\|/)[1].strip
                 header_lines << text unless text.empty?
