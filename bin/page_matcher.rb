@@ -114,9 +114,15 @@ class PageContentMatcher
   private
 
   # Extract text from a specific page using OCR
-  def extract_page_text_ocr(pdf_path, physical_page)
-    # Check OCR cache first
-    cache_key = "#{File.basename(pdf_path)}:#{physical_page}"
+  def extract_page_text_ocr(pdf_path, physical_page, logical_page: nil)
+    # Use logical page for cache key if provided (for YOUR PDF)
+    # Use physical page for THEIR PDF (doesn't change)
+    if logical_page && pdf_path == @yours_pdf
+      cache_key = "#{File.basename(pdf_path)}:logical_#{logical_page}"
+    else
+      cache_key = "#{File.basename(pdf_path)}:#{physical_page}"
+    end
+
     return @ocr_cache[cache_key] if @ocr_cache.key?(cache_key)
 
     # Check disk cache
@@ -166,7 +172,8 @@ class PageContentMatcher
 
     return nil if physical_page.nil?
 
-    extract_page_text_ocr(pdf_path, physical_page)
+    # Pass logical page for YOUR PDF cache key (survives TOC regeneration)
+    extract_page_text_ocr(pdf_path, physical_page, logical_page: logical_page)
   end
 
   # Extract with caching
