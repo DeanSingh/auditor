@@ -48,32 +48,22 @@ class MedicalRecordsPipeline
     end
 
     # Phase 3: Convert to PDF (BEFORE page matching - page_matcher needs PDFs!)
+    # Always convert to ensure latest version of DOCX is used
     run_phase("Phase 3: Converting Word document to PDF") do
-      convert_needed = []
-
-      # Check if your indexed doc needs conversion
       if @your_indexed.end_with?('.docx')
-        your_indexed_pdf = @your_indexed.gsub(/\.docx$/i, '.pdf')
-        convert_needed << @your_indexed unless File.exist?(your_indexed_pdf)
-      end
+        pdf_file = @your_indexed.gsub(/\.docx$/i, '.pdf')
+        print "  Converting #{File.basename(@your_indexed)}... "
 
-      if convert_needed.empty?
-        puts "  (PDF already exists, skipping conversion)"
-        true
-      else
-        success = true
-        convert_needed.each do |docx_file|
-          pdf_file = docx_file.gsub(/\.docx$/i, '.pdf')
-          print "  Converting #{File.basename(docx_file)}... "
-
-          if convert_to_pdf(docx_file, pdf_file)
-            puts "✓"
-          else
-            puts "✗ (failed)"
-            success = false
-          end
+        if convert_to_pdf(@your_indexed, pdf_file)
+          puts "✓"
+          true
+        else
+          puts "✗ (failed)"
+          false
         end
-        success
+      else
+        puts "  (No DOCX file, skipping conversion)"
+        true
       end
     end
 
