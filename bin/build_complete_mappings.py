@@ -4,13 +4,57 @@
 import json
 import sys
 
-def build_yours_mapping(max_logical_page=500):
+def build_yours_mapping(pdf_path, max_logical_page=500):
     """
-    Your PDF has linear offset: Physical = Logical + 142
+    Your PDF has linear offset: Physical = Logical + offset
+    Offset is dynamically detected from the first hyperlink (logical page 1)
     """
-    offset = 142
-    mapping = {}
+    import fitz
 
+    doc = fitz.open(pdf_path)
+    offset = None
+
+    # Scan first 50 pages of TOC to find the first hyperlink to logical page 1
+    for page_num in range(min(50, len(doc))):
+        page = doc[page_num]
+        links = page.get_links()
+
+        for link in links:
+            if link.get('kind') in [fitz.LINK_GOTO, fitz.LINK_NAMED]:
+                rect = fitz.Rect(link['from'])
+                link_text = page.get_text("text", clip=rect).strip()
+
+                # Look for hyperlink with text "1" (logical page 1)
+                if link_text == "1":
+                    dest_page = -1
+                    if link.get('kind') == fitz.LINK_GOTO:
+                        dest_page = link.get('page', -1) + 1  # Convert to 1-indexed
+                    elif link.get('kind') == fitz.LINK_NAMED:
+                        page_val = link.get('page', -1)
+                        try:
+                            if isinstance(page_val, str):
+                                dest_page = int(page_val) + 1
+                            elif isinstance(page_val, int):
+                                dest_page = page_val + 1
+                        except:
+                            pass
+
+                    if dest_page > 0:
+                        offset = dest_page - 1  # Physical page of logical 1, minus 1
+                        break
+
+        if offset is not None:
+            break
+
+    doc.close()
+
+    if offset is None:
+        print("  Warning: Could not detect offset from hyperlinks, using default 142")
+        offset = 142
+
+    print(f"  Detected offset: Physical = Logical + {offset}")
+
+    mapping = {}
     for logical in range(1, max_logical_page + 1):
         mapping[logical] = logical + offset
 
@@ -148,42 +192,41 @@ def main():
     print("="*80)
     print()
 
-    # Build YOUR mapping (linear offset)
+    mappings_dir = os.path.join(case_dir, "mappings")
+    os.makedirs(mappings_dir, exist_ok=True)
+
+    # Build YOUR mapping (always rebuild - changes with TOC length)
     print(f"Building mapping for YOUR PDF ({your_basename})...")
-    yours_mapping = build_yours_mapping(max_logical_page=500)
+    yours_mapping = build_yours_mapping(your_pdf, max_logical_page=500)
     print(f"  Created mapping for {len(yours_mapping)} logical pages")
-    print(f"  Formula: Physical = Logical + 142")
     print(f"  Sample: Logical 219 -> Physical {yours_mapping[219]}")
     print()
 
     # Save YOUR mapping
-    mappings_dir = os.path.join(case_dir, "mappings")
-    os.makedirs(mappings_dir, exist_ok=True)
-
     yours_mapping_file = os.path.join(mappings_dir, f"{your_basename}_hyperlink_mapping.json")
     with open(yours_mapping_file, "w") as f:
         json.dump(yours_mapping, f, indent=2)
     print(f"  Saved to: {yours_mapping_file}")
     print()
 
-    # Build THEIR mapping (from hyperlinks)
-    print(f"Building mapping for THEIR PDF ({their_basename})...")
-    theirs_mapping = build_theirs_mapping_from_hyperlinks(their_pdf)
-    print(f"  Created mapping for {len(theirs_mapping)} logical pages")
-
-    # Show samples
-    test_pages = [77, 235, 363, 370]
-    print("  Sample mappings:")
-    for logical in test_pages:
-        if logical in theirs_mapping:
-            print(f"    Logical {logical} -> Physical {theirs_mapping[logical]}")
-    print()
-
-    # Save THEIR mapping
+    # Build THEIR mapping (only if doesn't exist - their PDF doesn't change)
     theirs_mapping_file = os.path.join(mappings_dir, f"{their_basename}_hyperlink_mapping.json")
-    with open(theirs_mapping_file, "w") as f:
-        json.dump(theirs_mapping, f, indent=2)
-    print(f"  Saved to: {theirs_mapping_file}")
+
+    if os.path.exists(theirs_mapping_file):
+        print(f"Mapping for THEIR PDF ({their_basename}) already exists, skipping...")
+        with open(theirs_mapping_file, "r") as f:
+            theirs_mapping = json.load(f)
+        print(f"  Loaded {len(theirs_mapping)} mappings from cache")
+    else:
+        print(f"Building mapping for THEIR PDF ({their_basename})...")
+        theirs_mapping = build_theirs_mapping_from_hyperlinks(their_pdf)
+        print(f"  Created mapping for {len(theirs_mapping)} logical pages")
+
+        # Save THEIR mapping
+        with open(theirs_mapping_file, "w") as f:
+            json.dump(theirs_mapping, f, indent=2)
+        print(f"  Saved to: {theirs_mapping_file}")
+
     print()
 
     print("="*80)
