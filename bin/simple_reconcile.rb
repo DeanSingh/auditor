@@ -160,7 +160,7 @@ class TheirsTOCParser
           pages = parse_page_numbers(pages_str)
         end
 
-        # Extract header (provider info, typically 2-3 lines down)
+        # Extract header (provider info, typically 2-4 lines)
         header_lines = []
         (i+1..i+5).each do |idx|
           break if idx >= lines.length
@@ -168,7 +168,7 @@ class TheirsTOCParser
           next if l.match?(/^[\d\-,\s]+$/) # Skip page number lines
           next if l.empty?
           header_lines << l
-          break if header_lines.size >= 2
+          break if header_lines.size >= 4
         end
 
         entries << {
@@ -195,7 +195,7 @@ class TheirsTOCParser
           next if l.match?(/^[\d\-,\s]+$/)
           next if l.empty?
           header_lines << l
-          break if header_lines.size >= 2
+          break if header_lines.size >= 4
         end
 
         entries << {
@@ -260,7 +260,7 @@ class TOCComparator
 
     yours_only = []
     theirs_only = []
-    date_mismatches = []
+    same_dates = []
 
     all_dates.each do |date|
       yours_list = yours_by_date[date] || []
@@ -296,7 +296,7 @@ class TOCComparator
           theirs_list.each do |t_entry|
             # If pages overlap, both TOCs have the same date
             if (y_entry[:pages] & t_entry[:pages]).any?
-              date_mismatches << {
+              same_dates << {
                 date: y_entry[:date],  # Same date in both
                 your_pages: y_entry[:pages],
                 their_pages: t_entry[:pages],
@@ -312,7 +312,7 @@ class TOCComparator
     {
       yours_only: yours_only,
       theirs_only: theirs_only,
-      same_dates: date_mismatches  # Renamed from date_mismatches
+      same_dates: same_dates
     }
   end
 end

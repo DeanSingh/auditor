@@ -44,6 +44,7 @@ class PageContentMatcher
   end
 
   # Convert logical page to physical page for THEIR PDF (direct mapping)
+  # Returns nil if page not in mapping (no fallback)
   def their_logical_to_physical(logical_page)
     @theirs_mapping[logical_page]
   end
@@ -53,7 +54,7 @@ class PageContentMatcher
   def find_matching_page(your_page_num)
     your_text = extract_page_text(@yours_pdf, your_page_num)
 
-    # Page doesn't exist in mapping
+    # Page doesn't exist in your mapping
     if your_text.nil?
       return { not_in_document: true }
     end
@@ -62,7 +63,7 @@ class PageContentMatcher
 
     # Check if same logical page exists in their PDF mapping
     unless @theirs_mapping.key?(your_page_num)
-      # Not in their TOC - flag for manual review
+      # Not in their TOC - don't search randomly, flag for manual review
       return { not_in_toc: true }
     end
 
@@ -277,6 +278,17 @@ class DiscrepancyReporter
       puts "\nProcessing YOURS ONLY entries (#{@data['yours_only'].size})..."
       @data['yours_only'].each_with_index do |entry, idx|
         print "  #{idx + 1}/#{@data['yours_only'].size}... "
+
+        # Skip filtered entries that aren't in their TOC
+        # Both sides likely filtered the same routine content
+        header = entry['header'].to_s
+        if header.include?('[FILTERED]')
+          first_page_check = @matcher.find_matching_page(entry['pages'].first)
+          if first_page_check.nil? || first_page_check[:not_in_toc]
+            puts "⊘ (filtered, not in their TOC - skipped)"
+            next
+          end
+        end
 
         # Check if page exists in your document
         first_page_result = @matcher.find_matching_page(entry['pages'].first)
