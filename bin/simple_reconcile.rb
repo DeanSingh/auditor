@@ -6,9 +6,9 @@ require 'json'
 
 # Parse TOC entries from your indexed document (extracted text or docx)
 class YoursTOCParser
-  def self.parse(file_path)
+  def self.parse(file_path, case_dir: nil)
     entries = []
-    content = extract_text(file_path)
+    content = extract_text(file_path, case_dir: case_dir)
     lines = content.split("\n")
 
     i = 0
@@ -97,14 +97,21 @@ class YoursTOCParser
 
   private
 
-  def self.extract_text(file_path)
+  def self.extract_text(file_path, case_dir: nil)
     ext = File.extname(file_path).downcase
 
     case ext
     when '.txt'
       File.read(file_path, encoding: 'UTF-8', invalid: :replace, undef: :replace)
     when '.docx'
-      output_file = file_path.gsub(/\.docx$/i, '_toc_extracted.txt')
+      # Save extracted text to case folder if provided, otherwise same directory as source
+      if case_dir
+        basename = File.basename(file_path, '.*')
+        output_file = File.join(case_dir, "reports", "#{basename}_toc_extracted.txt")
+      else
+        output_file = file_path.gsub(/\.docx$/i, '_toc_extracted.txt')
+      end
+
       unless File.exist?(output_file)
         puts "  Converting #{File.basename(file_path)} to text..."
         system("pandoc", file_path, "-t", "plain", "-o", output_file)
@@ -341,7 +348,7 @@ if __FILE__ == $0
   end
 
   puts "Parsing your TOC: #{File.basename(yours_input)}..."
-  yours_entries = YoursTOCParser.parse(yours_input)
+  yours_entries = YoursTOCParser.parse(yours_input, case_dir: case_dir)
   puts "Found #{yours_entries.size} entries"
 
   puts "\nParsing vendor TOC: #{File.basename(theirs_pdf)}..."
