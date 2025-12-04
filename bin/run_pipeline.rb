@@ -17,24 +17,11 @@ class MedicalRecordsPipeline
     puts "=== Medical Records Processing Pipeline ==="
     puts
 
-    # Phase 0: Build page mappings (if not exist)
+    # Phase 0: Build page mappings
+    # Always rebuilds YOUR mapping (TOC length changes), caches THEIRS (doesn't change)
     run_phase("Phase 0: Building page mappings") do
-      your_basename = File.basename(@your_indexed, '.*')
-      their_basename = File.basename(@their_indexed, '.*')
-
-      mapping_files = [
-        File.join(@case_dir, "mappings", "#{your_basename}_hyperlink_mapping.json"),
-        File.join(@case_dir, "mappings", "#{their_basename}_hyperlink_mapping.json")
-      ]
-
-      if mapping_files.all? { |f| File.exist?(f) }
-        puts "  (Mapping files already exist, skipping)"
-        true
-      else
-        puts "  Creating page mappings..."
-        system("python", File.join(@bin_dir, "build_complete_mappings.py"),
-               @case_dir, @your_indexed, @their_indexed)
-      end
+      system("python", File.join(@bin_dir, "build_complete_mappings.py"),
+             @case_dir, @your_indexed, @their_indexed)
     end
 
     # Phase 1: SKIPPED - compare_docs.rb
