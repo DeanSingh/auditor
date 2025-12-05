@@ -3,6 +3,7 @@
 
 require 'csv'
 require 'json'
+require 'set'
 require 'tempfile'
 
 # Extract and compare page content to find matching pages across two PDFs
@@ -300,10 +301,9 @@ class DiscrepancyReporter
   end
 
   def generate_report(output_path)
-    CSV.open(output_path, "wb") do |csv|
-      csv << ["Status", "Your Date", "Their Date", "Your Pages", "Their Match Pages", "Match Confidence", "Your Header", "Their Header", "Action"]
+    all_rows = []
 
-      # Process YOURS ONLY entries
+    # Process YOURS ONLY entries
       puts "\nProcessing YOURS ONLY entries (#{@data['yours_only'].size})..."
       @data['yours_only'].each_with_index do |entry, idx|
         print "  #{idx + 1}/#{@data['yours_only'].size}... "
@@ -322,7 +322,7 @@ class DiscrepancyReporter
         # Check if page exists in your document
         first_page_result = @matcher.find_matching_page(entry['pages'].first)
         if first_page_result && first_page_result[:not_in_document]
-          csv << [
+          all_rows << [
             "YOURS ONLY",
             entry['date'],
             "—",
@@ -339,7 +339,7 @@ class DiscrepancyReporter
 
         # Check if page exists in their TOC
         if first_page_result && first_page_result[:not_in_toc]
-          csv << [
+          all_rows << [
             "YOURS ONLY",
             entry['date'],
             "—",
@@ -386,7 +386,7 @@ class DiscrepancyReporter
             end
           end
 
-          csv << [
+          all_rows << [
             "YOURS ONLY",
             entry['date'],
             their_date,
@@ -399,7 +399,7 @@ class DiscrepancyReporter
           ]
           puts "✓ (#{similarity_pct}%)"
         else
-          csv << [
+          all_rows << [
             "YOURS ONLY",
             entry['date'],
             "—",
@@ -428,7 +428,7 @@ class DiscrepancyReporter
         # Check if page number actually exists in their PDF
         first_page_result = @matcher.find_matching_page_reverse(entry['pages'].first)
         if first_page_result && first_page_result[:not_in_document]
-          csv << [
+          all_rows << [
             "THEIRS ONLY",
             "—",
             entry['date'],
@@ -445,7 +445,7 @@ class DiscrepancyReporter
 
         # Check if page exists in your TOC
         if first_page_result && first_page_result[:not_in_toc]
-          csv << [
+          all_rows << [
             "THEIRS ONLY",
             "—",
             entry['date'],
@@ -492,7 +492,7 @@ class DiscrepancyReporter
             end
           end
 
-          csv << [
+          all_rows << [
             "THEIRS ONLY",
             your_date,
             entry['date'],
@@ -505,7 +505,7 @@ class DiscrepancyReporter
           ]
           puts "✓ (#{similarity_pct}%)"
         else
-          csv << [
+          all_rows << [
             "THEIRS ONLY",
             "—",
             entry['date'],
@@ -525,7 +525,7 @@ class DiscrepancyReporter
       @data['same_dates'].each_with_index do |entry, idx|
         print "  #{idx + 1}/#{@data['same_dates'].size}... "
 
-        csv << [
+        all_rows << [
           "SAME DATE",
           entry['date'],
           entry['date'],
@@ -538,7 +538,74 @@ class DiscrepancyReporter
         ]
         puts "✓"
       end
+
+    # Post-process: merge YOURS ONLY + THEIRS ONLY into DATE MISMATCH where pages overlap
+    final_rows = merge_date_mismatches(all_rows)
+
+    # Write to CSV
+    CSV.open(output_path, "wb") do |csv|
+      csv << ["Status", "Your Date", "Their Date", "Your Pages", "Their Match Pages", "Match Confidence", "Your Header", "Their Header", "Action"]
+      final_rows.each { |row| csv << row }
     end
+  end
+
+  def merge_date_mismatches(rows)
+    yours_only_rows = rows.select { |r| r[0] == "YOURS ONLY" }
+    theirs_only_rows = rows.select { |r| r[0] == "THEIRS ONLY" }
+    other_rows = rows.reject { |r| r[0] == "YOURS ONLY" || r[0] == "THEIRS ONLY" }
+
+    merged = []
+    merged_indices = { yours: Set.new, theirs: Set.new }
+
+    # Find YOURS ONLY entries that overlap with THEIRS ONLY
+    yours_only_rows.each_with_index do |yours_row, y_idx|
+      # Column 4 is "Their Match Pages" - the page that matched in their PDF
+      their_match_page = yours_row[4]
+      next if their_match_page == "—" || their_match_page.nil?
+
+      # Find THEIRS ONLY entries containing this matched page
+      theirs_only_rows.each_with_index do |theirs_row, t_idx|
+        # Column 4 is "Their Match Pages" for THEIRS ONLY
+        their_pages_str = theirs_row[4]
+        their_pages = their_pages_str.split(",").map(&:strip).map(&:to_i)
+
+        # Check if the matched page exists in THEIRS pages
+        if their_pages.include?(their_match_page.to_i)
+          # Merge into DATE MISMATCH
+          merged << [
+            "DATE MISMATCH",
+            yours_row[1],  # Your Date
+            theirs_row[2], # Their Date
+            yours_row[3],  # Your Pages
+            theirs_row[4], # Their Pages
+            yours_row[5],  # Confidence from match
+            yours_row[6],  # Your Header
+            theirs_row[7], # Their Header
+            "VERIFY CORRECT DATE - Check header text for actual date"
+          ]
+          merged_indices[:yours].add(y_idx)
+          merged_indices[:theirs].add(t_idx)
+        end
+      end
+    end
+
+    # Collect non-merged rows
+    final_rows = []
+
+    # Order: Errors first (issues to fix), then good matches (SAME DATE)
+    # 1. DATE MISMATCH - needs correction
+    final_rows.concat(merged)
+
+    # 2. YOURS ONLY - missing from vendor
+    yours_only_rows.each_with_index { |row, idx| final_rows << row unless merged_indices[:yours].include?(idx) }
+
+    # 3. THEIRS ONLY - missing from yours
+    theirs_only_rows.each_with_index { |row, idx| final_rows << row unless merged_indices[:theirs].include?(idx) }
+
+    # 4. SAME DATE - correct matches (good)
+    final_rows.concat(other_rows)
+
+    final_rows
   end
 
   private
