@@ -363,15 +363,34 @@ class DiscrepancyReporter
           confidence = categorize_confidence(best[:match][:score])
           action = generate_action("YOURS ONLY", confidence, best[:match][:page])
 
+          # Look up the matched page in THEIR TOC to get date and header
+          matched_page = best[:match][:page]
+          their_date = "—"
+          their_header = "—"
+
+          # Search theirs_only for an entry containing the matched page
+          theirs_entry = @data['theirs_only'].find { |e| e['pages'].include?(matched_page) }
+          if theirs_entry
+            their_date = theirs_entry['date']
+            their_header = theirs_entry['header']
+          else
+            # Also search same_dates (page might be in both TOCs)
+            same_dates_entry = @data['same_dates'].find { |e| e['their_pages'].include?(matched_page) }
+            if same_dates_entry
+              their_date = same_dates_entry['date']
+              their_header = same_dates_entry['their_header']
+            end
+          end
+
           csv << [
             "YOURS ONLY",
             entry['date'],
-            "—",
+            their_date,
             entry['pages'].join(", "),
             best[:match][:page],
             confidence,
             entry['header'],
-            "—",
+            their_header,
             action
           ]
           puts "✓ (#{similarity_pct}%)"
@@ -450,14 +469,33 @@ class DiscrepancyReporter
           confidence = categorize_confidence(best[:match][:score])
           action = generate_action("THEIRS ONLY", confidence, best[:match][:page])
 
+          # Look up the matched page in YOUR TOC to get date and header
+          matched_page = best[:match][:page]
+          your_date = "—"
+          your_header = "—"
+
+          # Search yours_only for an entry containing the matched page
+          yours_entry = @data['yours_only'].find { |e| e['pages'].include?(matched_page) }
+          if yours_entry
+            your_date = yours_entry['date']
+            your_header = yours_entry['header']
+          else
+            # Also search same_dates (page might be in both TOCs)
+            same_dates_entry = @data['same_dates'].find { |e| e['your_pages'].include?(matched_page) }
+            if same_dates_entry
+              your_date = same_dates_entry['date']
+              your_header = same_dates_entry['your_header']
+            end
+          end
+
           csv << [
             "THEIRS ONLY",
-            "—",
+            your_date,
             entry['date'],
             best[:match][:page],
             entry['pages'].join(", "),
             confidence,
-            "—",
+            your_header,
             entry['header'],
             action
           ]
