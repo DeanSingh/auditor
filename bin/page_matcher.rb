@@ -7,9 +7,10 @@ require 'tempfile'
 
 # Extract and compare page content to find matching pages across two PDFs
 class PageContentMatcher
-  def initialize(yours_pdf, theirs_pdf, yours_mapping: nil, theirs_mapping: nil, base_path: '.')
+  def initialize(yours_pdf, theirs_pdf, yours_mapping: nil, theirs_mapping: nil, base_path: '.', yours_source: nil)
     @yours_pdf = yours_pdf
     @theirs_pdf = theirs_pdf
+    @yours_source = yours_source  # Original DOCX file (if exists)
     @yours_cache = {}
     @theirs_cache = {}
     @ocr_cache = {}
@@ -134,11 +135,14 @@ class PageContentMatcher
       # Check cache staleness for YOUR PDF only (can change during testing)
       if pdf_path == @yours_pdf
         cache_mtime = File.mtime(cache_file)
-        pdf_mtime = File.mtime(pdf_path)
 
-        if cache_mtime < pdf_mtime
-          # Cache is stale - YOUR PDF was modified after cache was created
-          puts "    Cache stale for #{cache_key}, regenerating..."
+        # Check against source DOCX if available, otherwise check PDF
+        source_file = @yours_source && File.exist?(@yours_source) ? @yours_source : pdf_path
+        source_mtime = File.mtime(source_file)
+
+        if cache_mtime < source_mtime
+          # Cache is stale - source file was modified after cache was created
+          puts "    Cache stale for #{cache_key} (#{File.basename(source_file)} changed), regenerating..."
           File.delete(cache_file)
         else
           # Cache is valid
@@ -581,10 +585,11 @@ end
 
 # Main execution
 if __FILE__ == $0
-  if ARGV.length != 4
-    puts "Usage: #{$0} <case_dir> <reconciliation_data.json> <your_indexed.pdf> <their_indexed.pdf>"
+  if ARGV.length < 4 || ARGV.length > 5
+    puts "Usage: #{$0} <case_dir> <reconciliation_data.json> <your_indexed.pdf> <their_indexed.pdf> [your_source.docx]"
     puts "\nExample:"
     puts "  #{$0} ~/git/auditor/cases/Reyes_Isidro reconciliation_data.json yours.pdf theirs.pdf"
+    puts "  #{$0} ~/git/auditor/cases/Reyes_Isidro reconciliation_data.json yours.pdf theirs.pdf yours.docx"
     exit 1
   end
 
@@ -592,6 +597,7 @@ if __FILE__ == $0
   json_file = ARGV[1]
   yours_pdf = ARGV[2]
   theirs_pdf = ARGV[3]
+  yours_source = ARGV[4]  # Optional: source DOCX file
 
   unless File.exist?(json_file)
     puts "Error: Reconciliation data not found: #{json_file}"
@@ -614,7 +620,7 @@ if __FILE__ == $0
 
   # Initialize page matcher
   puts "Initializing page content matcher..."
-  matcher = PageContentMatcher.new(yours_pdf, theirs_pdf, base_path: case_dir)
+  matcher = PageContentMatcher.new(yours_pdf, theirs_pdf, base_path: case_dir, yours_source: yours_source)
 
   # Generate report
   output_path = File.join(case_dir, "reports", "discrepancy_report.csv")

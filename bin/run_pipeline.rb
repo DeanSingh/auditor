@@ -70,7 +70,7 @@ class MedicalRecordsPipeline
     run_phase("Phase 4: Matching pages by content similarity") do
       reconciliation_json = File.join(@case_dir, "reports", "reconciliation_data.json")
       system(File.join(@bin_dir, "page_matcher.rb"),
-             @case_dir, reconciliation_json, @your_pdf, @their_indexed)
+             @case_dir, reconciliation_json, @your_pdf, @their_indexed, @your_indexed)
     end
 
     elapsed = Time.now - @start_time
