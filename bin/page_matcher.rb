@@ -425,7 +425,7 @@ class DiscrepancyReporter
           next
         end
 
-        # Check if page exists in their document
+        # Check if page number actually exists in their PDF
         first_page_result = @matcher.find_matching_page_reverse(entry['pages'].first)
         if first_page_result && first_page_result[:not_in_document]
           csv << [
@@ -434,12 +434,12 @@ class DiscrepancyReporter
             entry['date'],
             "—",
             entry['pages'].join(", "),
-            "NOT IN THEIR DOCUMENT",
+            "PAGE NOT FOUND IN THEIR PDF",
             "—",
             entry['header'],
-            "Page not found in their PDF TOC"
+            "Page listed in their TOC but doesn't exist in their PDF file"
           ]
-          puts "⊘ (not in document)"
+          puts "⊘ (page not in their PDF)"
           next
         end
 

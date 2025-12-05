@@ -3,6 +3,7 @@
 
 require 'date'
 require 'json'
+require 'set'
 
 # Parse TOC entries from your indexed document (extracted text or docx)
 class YoursTOCParser
@@ -199,23 +200,57 @@ class TheirsTOCParser
         header_lines = []
 
         idx = i + 1
+        lines_after_date = 0
+        collecting_pages = true
+
         while idx < lines.length
           l = lines[idx].strip
 
           # Stop at next date pattern (new entry)
           break if l.match?(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/)
 
-          # Stop at "Undated" marker
+          # Stop at "Undated" marker (new entry)
           break if l.match?(/^Undated$/)
 
-          # Collect page numbers (lines starting with digits, dashes, commas)
-          if l.match?(/^([\d\-,\s]+)/)
-            pages_lines << l.match(/^([\d\-,\s]+)/)[1]
-          elsif !l.empty? && header_lines.size < 4
-            # After page numbers, collect header text
-            # Remove page range prefix if it got concatenated (e.g., "235-240Parveen" -> "Parveen")
-            cleaned = l.sub(/^\d+\s*-\s*\d+\s*/, '')
-            header_lines << cleaned unless cleaned.empty?
+          # Skip empty lines
+          if l.empty?
+            idx += 1
+            next
+          end
+
+          # Stop if we hit summary excerpt (medical content keywords or colon patterns)
+          if l.match?(/^(SUBJECTIVE|OBJECTIVE|HISTORY|CHIEF|DIAGNOSIS|ASSESSMENT|TREATMENT|PLAN|DOI:|Patient (presents|complains|reports|states)|Received for)/i)
+            break
+          end
+          # Stop if line contains summary pattern (colon followed by description)
+          if l.match?(/:\s+[A-Z]/) || l.match?(/\.\s+[A-Z]/)
+            break
+          end
+
+          lines_after_date += 1
+
+          # Phase 1: First 2 non-empty lines - collect pages
+          if collecting_pages && lines_after_date <= 2
+            if l.match?(/^[\d\-,\s]+/)
+              # Extract pages: "235-240Parveen" -> "235-240"
+              page_part = l.match(/^([\d\-,\s]+)/)[1]
+              pages_lines << page_part
+
+              # Extract provider text after pages: "235-240Parveen" -> "Parveen"
+              text_part = l.sub(/^[\d\-,\s]+/, '').strip
+              unless text_part.empty?
+                header_lines << text_part
+              end
+            else
+              # Line starts with letter (provider name), stop collecting pages
+              collecting_pages = false
+              header_lines << l
+            end
+          # Phase 2: After first 2 lines - collect header only (provider name continuation)
+          else
+            collecting_pages = false
+            # Collect short provider name lines
+            header_lines << l
           end
 
           idx += 1
@@ -227,12 +262,15 @@ class TheirsTOCParser
         end
         pages = pages.uniq.sort
 
-        entries << {
-          date: normalized,
-          date_str: date_str,
-          pages: pages,
-          header: header_lines.join(" ")  # Join with space instead of comma
-        }
+        # Only add entry if it has pages (skip invalid date-only entries from index lists)
+        unless pages.empty?
+          entries << {
+            date: normalized,
+            date_str: date_str,
+            pages: pages,
+            header: header_lines.join(" ")  # Join with space instead of comma
+          }
+        end
       elsif line.match?(/^Undated$/)
         normalized = "UNKNOWN"
 
@@ -245,20 +283,32 @@ class TheirsTOCParser
         while idx < lines.length
           l = lines[idx].strip
 
-          # Stop at next date pattern (new entry)
+          # Stop at next date pattern (new entry) - check BEFORE processing
           break if l.match?(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/)
 
-          # Stop at another "Undated" marker
+          # Stop at another "Undated" marker (new entry)
           break if l.match?(/^Undated$/)
 
-          # Collect page numbers (lines starting with digits, dashes, commas)
+          # Skip empty lines
+          if l.empty?
+            idx += 1
+            next
+          end
+
+          # Extract page numbers and provider text from line
           if l.match?(/^([\d\-,\s]+)/)
-            pages_lines << l.match(/^([\d\-,\s]+)/)[1]
-          elsif !l.empty? && header_lines.size < 4
-            # After page numbers, collect header text
-            # Remove page range prefix if it got concatenated
-            cleaned = l.sub(/^\d+\s*-\s*\d+\s*/, '')
-            header_lines << cleaned unless cleaned.empty?
+            # Extract pages: "235-240Parveen" -> "235-240"
+            page_part = l.match(/^([\d\-,\s]+)/)[1]
+            pages_lines << page_part
+
+            # Extract provider text after pages: "235-240Parveen" -> "Parveen"
+            text_part = l.sub(/^[\d\-,\s]+/, '').strip
+            unless text_part.empty?
+              header_lines << text_part
+            end
+          else
+            # Line has no page numbers - collect as provider text
+            header_lines << l
           end
 
           idx += 1
@@ -270,12 +320,15 @@ class TheirsTOCParser
         end
         pages = pages.uniq.sort
 
-        entries << {
-          date: normalized,
-          date_str: "Undated",
-          pages: pages,
-          header: header_lines.join(" ")  # Join with space instead of comma
-        }
+        # Only add entry if it has pages (skip invalid entries)
+        unless pages.empty?
+          entries << {
+            date: normalized,
+            date_str: "Undated",
+            pages: pages,
+            header: header_lines.join(" ")  # Join with space instead of comma
+          }
+        end
       end
 
       i += 1
@@ -363,7 +416,10 @@ class TOCComparator
           }
         end
       else
-        # Date exists in both - check if pages match
+        # Date exists in both - check if pages overlap
+        matched_theirs = Set.new
+        matched_yours = Set.new
+
         yours_list.each do |y_entry|
           theirs_list.each do |t_entry|
             # If pages overlap, both TOCs have the same date
@@ -375,7 +431,33 @@ class TOCComparator
                 your_header: y_entry[:header],
                 their_header: t_entry[:header]
               }
+              matched_theirs.add(t_entry.object_id)
+              matched_yours.add(y_entry.object_id)
             end
+          end
+        end
+
+        # Add non-overlapping THEIRS entries to theirs_only
+        theirs_list.each do |t_entry|
+          unless matched_theirs.include?(t_entry.object_id)
+            next if t_entry[:pages].nil? || t_entry[:pages].empty?
+            theirs_only << {
+              date: t_entry[:date],
+              pages: t_entry[:pages],
+              header: t_entry[:header]
+            }
+          end
+        end
+
+        # Add non-overlapping YOURS entries to yours_only
+        yours_list.each do |y_entry|
+          unless matched_yours.include?(y_entry.object_id)
+            next if y_entry[:pages].nil? || y_entry[:pages].empty?
+            yours_only << {
+              date: y_entry[:date],
+              pages: y_entry[:pages],
+              header: y_entry[:header]
+            }
           end
         end
       end
