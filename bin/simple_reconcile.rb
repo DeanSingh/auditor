@@ -32,12 +32,24 @@ class YoursTOCParser
           header_lines = []
           page_nums = []
 
-          (i..i+10).each do |idx|
-            break if idx >= lines.length
+          # Scan until boundary (next date, separator, or EOF)
+          # Start from current line (i) which has MM/DD, continue through /YYYY line
+          idx = i
+          while idx < lines.length
             l = lines[idx]
 
             # Stop at TOC entry separator (marks end of current entry)
             break if l.match?(/^\+[-+]+\+/)
+
+            # Stop at next date pattern (new entry) - but not the current line
+            # Need to skip at least the /YYYY line (i+1)
+            if idx > i + 1
+              # Check for MM/DD pattern (start of new entry)
+              break if l.match?(/^\|\s*\d{1,2}\/\d{1,2}\s*\|/)
+            end
+
+            # Stop at "Unknown" date marker (but not if we're on the current entry)
+            break if idx > i + 1 && (l.match?(/^\|\s*Un\s*\|/) || l.match?(/^\|\s*unknown\s*\|/i))
 
             # Extract header text from 3rd column
             if l.match?(/\|\s*[^|]*\|\s*[^|]*\|\s*([^|]+)\|/)
@@ -50,6 +62,8 @@ class YoursTOCParser
               pages_match = l.match(/\|\s*([\d,\s]+)\s*\|?\s*$/)
               page_nums.concat(pages_match[1].scan(/\d+/).map(&:to_i))
             end
+
+            idx += 1
           end
 
           normalized_date = normalize_date(date_str)
@@ -64,35 +78,45 @@ class YoursTOCParser
         end
       # Pattern: Unknown date entries
       elsif line.match?(/^\|\s*Un\s*\|/) || line.match?(/^\|\s*unknown\s*\|/i)
-        # Extract page numbers for unknown dates
-        page_line = lines[i..i+5].find { |l| l.match?(/\|\s*([\d,\s]+)\s*\|?\s*$/) }
-        if page_line
-          pages_match = page_line.match(/\|\s*([\d,\s]+)\s*\|?\s*$/)
-          if pages_match
-            pages = pages_match[1].scan(/\d+/).map(&:to_i)
+        # Scan until boundary to extract pages and headers
+        header_lines = []
+        page_nums = []
 
-            # Try to extract header
-            header_lines = []
-            (i..i+5).each do |idx|
-              break if idx >= lines.length
-              l = lines[idx]
+        idx = i
+        while idx < lines.length
+          l = lines[idx]
 
-              # Stop at TOC entry separator
-              break if l.match?(/^\+[-+]+\+/)
+          # Stop at TOC entry separator
+          break if l.match?(/^\+[-+]+\+/)
 
-              if l.match?(/\|\s*[^|]*\|\s*[^|]*\|\s*([^|]+)\|/)
-                text = l.match(/\|\s*[^|]*\|\s*[^|]*\|\s*([^|]+)\|/)[1].strip
-                header_lines << text unless text.empty?
-              end
-            end
+          # Stop at next date pattern (new entry)
+          break if idx > i && (l.match?(/^\|\s*\d{1,2}\/\d{1,2}\s*\|/) || l.match?(/^\|\s*\/\d{2,4}\s*\|/))
 
-            entries << {
-              date: "UNKNOWN",
-              date_str: "Unknown",
-              pages: pages.uniq.sort,
-              header: header_lines.first(3).join(" ").strip
-            }
+          # Stop at another "Unknown" marker
+          break if idx > i && (l.match?(/^\|\s*Un\s*\|/) || l.match?(/^\|\s*unknown\s*\|/i))
+
+          # Extract header text from 3rd column
+          if l.match?(/\|\s*[^|]*\|\s*[^|]*\|\s*([^|]+)\|/)
+            text = l.match(/\|\s*[^|]*\|\s*[^|]*\|\s*([^|]+)\|/)[1].strip
+            header_lines << text unless text.empty?
           end
+
+          # Extract page numbers from last column
+          if l.match?(/\|\s*([\d,\s]+)\s*\|?\s*$/)
+            pages_match = l.match(/\|\s*([\d,\s]+)\s*\|?\s*$/)
+            page_nums.concat(pages_match[1].scan(/\d+/).map(&:to_i))
+          end
+
+          idx += 1
+        end
+
+        unless page_nums.empty?
+          entries << {
+            date: "UNKNOWN",
+            date_str: "Unknown",
+            pages: page_nums.uniq.sort,
+            header: header_lines.first(3).join(" ").strip
+          }
         end
       end
 
@@ -167,31 +191,41 @@ class TheirsTOCParser
         date_str = line
         normalized = normalize_date(date_str)
 
-        # Next line should have pages and provider
-        next_line = i + 1 < lines.length ? lines[i + 1] : ""
-
-        # Extract page numbers (format: "229-235" or "306" or "209-210, 227")
+        # Collect page numbers from multiple lines (they may be split)
+        # Example: "208," on one line, "219-221" on next
+        # Scan until boundary (next date, Undated, or EOF)
         pages = []
-        if next_line.match?(/^([\d\-,\s]+)/)
-          pages_str = next_line.match(/^([\d\-,\s]+)/)[1]
-          pages = parse_page_numbers(pages_str)
-        end
-
-        # Extract header (provider info, typically 2-4 lines)
+        pages_lines = []
         header_lines = []
-        (i+1..i+5).each do |idx|
-          break if idx >= lines.length
+
+        idx = i + 1
+        while idx < lines.length
           l = lines[idx].strip
-          next if l.match?(/^[\d\-,\s]+$/) # Skip page number lines
-          next if l.empty?
 
-          # Remove page range prefix if it got concatenated (e.g., "235-240Parveen" -> "Parveen")
-          l = l.sub(/^\d+\s*-\s*\d+\s*/, '')
-          next if l.empty?
+          # Stop at next date pattern (new entry)
+          break if l.match?(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/)
 
-          header_lines << l
-          break if header_lines.size >= 4
+          # Stop at "Undated" marker
+          break if l.match?(/^Undated$/)
+
+          # Collect page numbers (lines starting with digits, dashes, commas)
+          if l.match?(/^([\d\-,\s]+)/)
+            pages_lines << l.match(/^([\d\-,\s]+)/)[1]
+          elsif !l.empty? && header_lines.size < 4
+            # After page numbers, collect header text
+            # Remove page range prefix if it got concatenated (e.g., "235-240Parveen" -> "Parveen")
+            cleaned = l.sub(/^\d+\s*-\s*\d+\s*/, '')
+            header_lines << cleaned unless cleaned.empty?
+          end
+
+          idx += 1
         end
+
+        # Parse all collected page number strings
+        pages_lines.each do |ps|
+          pages.concat(parse_page_numbers(ps))
+        end
+        pages = pages.uniq.sort
 
         entries << {
           date: normalized,
@@ -202,28 +236,39 @@ class TheirsTOCParser
       elsif line.match?(/^Undated$/)
         normalized = "UNKNOWN"
 
-        next_line = i + 1 < lines.length ? lines[i + 1] : ""
+        # Scan until boundary (next date, another Undated, or EOF)
         pages = []
-        if next_line.match?(/^([\d\-,\s]+)/)
-          pages_str = next_line.match(/^([\d\-,\s]+)/)[1]
-          pages = parse_page_numbers(pages_str)
-        end
-
-        # Extract header
+        pages_lines = []
         header_lines = []
-        (i+1..i+5).each do |idx|
-          break if idx >= lines.length
+
+        idx = i + 1
+        while idx < lines.length
           l = lines[idx].strip
-          next if l.match?(/^[\d\-,\s]+$/)
-          next if l.empty?
 
-          # Remove page range prefix if it got concatenated
-          l = l.sub(/^\d+\s*-\s*\d+\s*/, '')
-          next if l.empty?
+          # Stop at next date pattern (new entry)
+          break if l.match?(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/)
 
-          header_lines << l
-          break if header_lines.size >= 4
+          # Stop at another "Undated" marker
+          break if l.match?(/^Undated$/)
+
+          # Collect page numbers (lines starting with digits, dashes, commas)
+          if l.match?(/^([\d\-,\s]+)/)
+            pages_lines << l.match(/^([\d\-,\s]+)/)[1]
+          elsif !l.empty? && header_lines.size < 4
+            # After page numbers, collect header text
+            # Remove page range prefix if it got concatenated
+            cleaned = l.sub(/^\d+\s*-\s*\d+\s*/, '')
+            header_lines << cleaned unless cleaned.empty?
+          end
+
+          idx += 1
         end
+
+        # Parse all collected page number strings
+        pages_lines.each do |ps|
+          pages.concat(parse_page_numbers(ps))
+        end
+        pages = pages.uniq.sort
 
         entries << {
           date: normalized,
