@@ -17,7 +17,8 @@ def extract_hyperlinks_from_toc(pdf_path):
     print(f"Total pages in PDF: {len(doc)}")
     print()
 
-    # Scan pages until we stop finding hyperlinks
+    # Scan all pages for hyperlinks
+    # TOCs can have gaps (pages without links), so we scan the entire document
     for page_num in range(len(doc)):
         page = doc[page_num]
         links = page.get_links()
@@ -25,13 +26,7 @@ def extract_hyperlinks_from_toc(pdf_path):
         # Filter for internal goto links (kind 1) or named links (kind 4)
         goto_links = [link for link in links if link.get('kind') in [fitz.LINK_GOTO, fitz.LINK_NAMED]]
 
-        if not goto_links:
-            # No hyperlinks found on this page
-            if page_num > 0 and len(hyperlinks) > 0:
-                # We found links before but not on this page - likely end of TOC
-                print(f"Stopped at page {page_num + 1} (no more hyperlinks found)")
-                break
-        else:
+        if goto_links:
             print(f"Page {page_num + 1}: Found {len(goto_links)} hyperlinks")
 
             for link in goto_links:
@@ -95,13 +90,23 @@ def build_page_mapping(hyperlinks):
             # Single page number
             logical_page = int(link_text)
             mapping[logical_page] = physical_page
+        elif link_text.endswith('-') and link_text[:-1].strip().isdigit():
+            # Range start marker (e.g., "229-") - just store the start page
+            logical_page = int(link_text[:-1].strip())
+            mapping[logical_page] = physical_page
+        elif link_text.endswith(',') and link_text[:-1].strip().isdigit():
+            # Single page with trailing comma (e.g., "304,")
+            logical_page = int(link_text[:-1].strip())
+            mapping[logical_page] = physical_page
         elif ',' in link_text:
             # Multiple individual pages like "1, 2, 3"
             page_nums = [int(p.strip()) for p in link_text.split(',') if p.strip().isdigit()]
-            for pnum in page_nums:
-                # Each gets the same physical page? Or need individual links?
-                # This case might need manual verification
-                print(f"  Note: Multiple pages in one link: {link_text} -> {physical_page}")
+            if len(page_nums) == 1:
+                # Actually just one page with formatting quirks
+                mapping[page_nums[0]] = physical_page
+            else:
+                # Multiple pages pointing to same physical location - needs verification
+                print(f"  Warning: Multiple pages in one link: {link_text} -> {physical_page}")
 
     # Now handle range interpolation
     # Find pairs of range starts and ends
@@ -132,92 +137,104 @@ def build_page_mapping(hyperlinks):
         # Clean up temporary range marker
         del mapping[key]
 
-    return mapping
+    # Additional interpolation: Fill in gaps between consecutive hyperlinks
+    # if they form a linear progression (old build_complete_mappings.py approach)
+    numeric_mapping = {k: v for k, v in mapping.items() if isinstance(k, int)}
+    sorted_logical = sorted(numeric_mapping.keys())
+    complete_mapping = {}
+
+    for i in range(len(sorted_logical) - 1):
+        start_logical = sorted_logical[i]
+        end_logical = sorted_logical[i + 1]
+        start_physical = numeric_mapping[start_logical]
+        end_physical = numeric_mapping[end_logical]
+
+        # Add the start entry
+        complete_mapping[start_logical] = start_physical
+
+        # Only interpolate if physical pages form a continuous range matching logical progression
+        logical_diff = end_logical - start_logical
+        physical_diff = end_physical - start_physical
+
+        if physical_diff == logical_diff and logical_diff > 1:
+            # Interpolate between start and end
+            for logical in range(start_logical + 1, end_logical):
+                physical = start_physical + (logical - start_logical)
+                complete_mapping[logical] = physical
+
+    # Add the last entry
+    if sorted_logical:
+        last_logical = sorted_logical[-1]
+        complete_mapping[last_logical] = numeric_mapping[last_logical]
+
+    return complete_mapping
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python extract_hyperlinks.py <pdf_path>")
-        sys.exit(1)
+    import argparse
+    import json
 
-    pdf_path = sys.argv[1]
+    parser = argparse.ArgumentParser(description='Extract hyperlinks from PDF TOC and build page mapping')
+    parser.add_argument('pdf_path', help='Path to PDF file')
+    parser.add_argument('--output', '-o', help='Output JSON file (if not specified, prints detailed report)')
+    args = parser.parse_args()
 
-    print("="*80)
-    print("HYPERLINK EXTRACTION REPORT")
-    print("="*80)
-    print()
+    pdf_path = args.pdf_path
 
     # Extract hyperlinks
     hyperlinks = extract_hyperlinks_from_toc(pdf_path)
 
-    print()
-    print(f"Total hyperlinks found: {len(hyperlinks)}")
-    print()
-
-    # Show first 20
-    print("Sample links (first 20):")
-    for link_text, dest_page in hyperlinks[:20]:
-        print(f"  Link '{link_text}' -> Physical page {dest_page}")
-
-    if len(hyperlinks) > 20:
-        print(f"  ... and {len(hyperlinks) - 20} more")
-
-    print()
-    print("-"*80)
-    print("BUILDING PAGE MAPPING")
-    print("-"*80)
-    print()
-
     # Build mapping
     mapping = build_page_mapping(hyperlinks)
 
-    # Filter out only numeric keys for display
+    # Filter to only numeric keys
     numeric_mapping = {k: v for k, v in mapping.items() if isinstance(k, int)}
 
-    print(f"Built mapping for {len(numeric_mapping)} logical pages")
-    print()
+    if args.output:
+        # Output mode: Write JSON and minimal status
+        with open(args.output, 'w') as f:
+            json.dump(numeric_mapping, f, indent=2)
+        print(f"  Created mapping for {len(numeric_mapping)} logical pages")
+        if 1 in numeric_mapping:
+            print(f"  Sample: Logical 1 -> Physical {numeric_mapping[1]}")
+    else:
+        # Report mode: Detailed output
+        print("="*80)
+        print("HYPERLINK EXTRACTION REPORT")
+        print("="*80)
+        print()
+        print(f"Total hyperlinks found: {len(hyperlinks)}")
+        print()
 
-    # Show some sample mappings
-    sample_pages = [1, 2, 3, 77, 219, 235, 369, 370, 395]
-    print("Sample mappings:")
-    for logical in sample_pages:
-        if logical in numeric_mapping:
-            print(f"  Logical {logical} -> Physical {numeric_mapping[logical]}")
+        # Show first 20
+        print("Sample links (first 20):")
+        for link_text, dest_page in hyperlinks[:20]:
+            print(f"  Link '{link_text}' -> Physical page {dest_page}")
 
-    print()
-    print("-"*80)
-    print("TEXT EXTRACTION TEST")
-    print("-"*80)
-    print()
+        if len(hyperlinks) > 20:
+            print(f"  ... and {len(hyperlinks) - 20} more")
 
-    # Test text extraction from a few pages
-    test_logical_pages = [1, 219, 370]
+        print()
+        print("-"*80)
+        print("BUILDING PAGE MAPPING")
+        print("-"*80)
+        print()
+        print(f"Built mapping for {len(numeric_mapping)} logical pages")
+        print()
 
-    doc = fitz.open(pdf_path)
+        # Show sample mappings from start, middle, and end
+        sorted_pages = sorted(numeric_mapping.keys())
+        if sorted_pages:
+            sample_count = min(10, len(sorted_pages))
+            # Get evenly distributed samples
+            step = max(1, len(sorted_pages) // sample_count)
+            sample_pages = [sorted_pages[i * step] for i in range(sample_count)]
 
-    for logical in test_logical_pages:
-        if logical in numeric_mapping:
-            physical = numeric_mapping[logical]
+            print("Sample mappings:")
+            for logical in sample_pages:
+                print(f"  Logical {logical} -> Physical {numeric_mapping[logical]}")
 
-            print(f"Logical page {logical} (Physical page {physical}):")
-
-            if physical <= len(doc):
-                page = doc[physical - 1]  # 0-indexed
-                text = page.get_text()
-
-                print(f"  Characters extracted: {len(text)}")
-                print(f"  First 500 chars:")
-                print('  """')
-                for line in text[:500].split('\n'):
-                    print(f"  {line}")
-                print('  """')
-            else:
-                print(f"  Error: Physical page {physical} exceeds PDF length ({len(doc)})")
-
-            print()
-
-    doc.close()
-
-    print("="*80)
+        print()
+        print("="*80)
 
 if __name__ == "__main__":
     main()

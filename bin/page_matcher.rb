@@ -16,8 +16,8 @@ class PageContentMatcher
     @base_path = base_path
 
     # Load page mappings (logical page -> physical page)
-    @yours_mapping = yours_mapping || load_page_mapping('medical_summary_indexed_hyperlink_mapping.json')
-    @theirs_mapping = theirs_mapping || load_page_mapping('COMPLETE_Reyes_Isidro_10_hyperlink_mapping.json')
+    @yours_mapping = yours_mapping || load_page_mapping('yours_mapping.json')
+    @theirs_mapping = theirs_mapping || load_page_mapping('theirs_mapping.json')
 
     puts "Loaded #{@yours_mapping.size} mappings for YOUR PDF"
     puts "Loaded #{@theirs_mapping.size} mappings for THEIR PDF"
@@ -131,9 +131,27 @@ class PageContentMatcher
     cache_file = "#{cache_dir}/#{cache_key.gsub(':', '_')}.txt"
 
     if File.exist?(cache_file)
-      text = File.read(cache_file)
-      @ocr_cache[cache_key] = text
-      return text
+      # Check cache staleness for YOUR PDF only (can change during testing)
+      if pdf_path == @yours_pdf
+        cache_mtime = File.mtime(cache_file)
+        pdf_mtime = File.mtime(pdf_path)
+
+        if cache_mtime < pdf_mtime
+          # Cache is stale - YOUR PDF was modified after cache was created
+          puts "    Cache stale for #{cache_key}, regenerating..."
+          File.delete(cache_file)
+        else
+          # Cache is valid
+          text = File.read(cache_file)
+          @ocr_cache[cache_key] = text
+          return text
+        end
+      else
+        # THEIR PDF doesn't change, always use cache
+        text = File.read(cache_file)
+        @ocr_cache[cache_key] = text
+        return text
+      end
     end
 
     # Run OCR

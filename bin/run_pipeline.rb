@@ -17,31 +17,13 @@ class MedicalRecordsPipeline
     puts "=== Medical Records Processing Pipeline ==="
     puts
 
-    # Phase 0: Build page mappings
-    # Always rebuilds YOUR mapping (TOC length changes), caches THEIRS (doesn't change)
-    run_phase("Phase 0: Building page mappings") do
-      system("python", File.join(@bin_dir, "build_complete_mappings.py"),
-             @case_dir, @your_indexed, @their_indexed)
-    end
-
-    # Phase 1: SKIPPED - compare_docs.rb
-    puts "Phase 1: Skipped (compare_docs.rb - record review content in TOC)"
-    puts
-
-    # Phase 2: Compare TOCs
-    run_phase("Phase 2: Reconciling TOCs") do
-      system(File.join(@bin_dir, "simple_reconcile.rb"),
-             @case_dir, @your_indexed, @their_indexed)
-    end
-
-    # Phase 3: Convert to PDF (BEFORE page matching - page_matcher needs PDFs!)
-    # Always convert to ensure latest version of DOCX is used
-    run_phase("Phase 3: Converting Word document to PDF") do
+    # Phase 1: Convert DOCX to PDF (if needed)
+    run_phase("Phase 1: Converting to PDF") do
       if @your_indexed.end_with?('.docx')
-        pdf_file = @your_indexed.gsub(/\.docx$/i, '.pdf')
+        @your_pdf = @your_indexed.gsub(/\.docx$/i, '.pdf')
         print "  Converting #{File.basename(@your_indexed)}... "
 
-        if convert_to_pdf(@your_indexed, pdf_file)
+        if convert_to_pdf(@your_indexed, @your_pdf)
           puts "✓"
           true
         else
@@ -49,18 +31,46 @@ class MedicalRecordsPipeline
           false
         end
       else
-        puts "  (No DOCX file, skipping conversion)"
+        @your_pdf = @your_indexed
+        puts "  (Already PDF, skipping conversion)"
         true
       end
     end
 
-    # Phase 4: Match pages by content similarity (AFTER PDF conversion)
+    # Phase 2: Build page mappings from hyperlinks
+    run_phase("Phase 2: Building page mappings") do
+      yours_mapping = File.join(@case_dir, "mappings", "yours_mapping.json")
+      theirs_mapping = File.join(@case_dir, "mappings", "theirs_mapping.json")
+
+      # Always rebuild yours (TOC changes)
+      puts "  Building YOUR mapping..."
+      success1 = system("python", File.join(@bin_dir, "extract_hyperlinks.py"),
+                        @your_pdf, "--output", yours_mapping)
+
+      # Cache theirs (doesn't change)
+      if File.exist?(theirs_mapping)
+        puts "  (THEIR mapping cached, skipping)"
+        success2 = true
+      else
+        puts "  Building THEIR mapping..."
+        success2 = system("python", File.join(@bin_dir, "extract_hyperlinks.py"),
+                          @their_indexed, "--output", theirs_mapping)
+      end
+
+      success1 && success2
+    end
+
+    # Phase 3: Reconcile TOCs
+    run_phase("Phase 3: Reconciling TOCs") do
+      system(File.join(@bin_dir, "simple_reconcile.rb"),
+             @case_dir, @your_indexed, @their_indexed)
+    end
+
+    # Phase 4: Match pages by content similarity
     run_phase("Phase 4: Matching pages by content similarity") do
-      # Use PDF version of your indexed doc
-      your_indexed_pdf = @your_indexed.gsub(/\.docx$/i, '.pdf')
       reconciliation_json = File.join(@case_dir, "reports", "reconciliation_data.json")
       system(File.join(@bin_dir, "page_matcher.rb"),
-             @case_dir, reconciliation_json, your_indexed_pdf, @their_indexed)
+             @case_dir, reconciliation_json, @your_pdf, @their_indexed)
     end
 
     elapsed = Time.now - @start_time
@@ -149,10 +159,9 @@ if __FILE__ == $0
       puts "  #{$0} /path/to/yours.pdf /path/to/COMPLETE_Reyes_Isidro_10.pdf  # Auto-detects case name"
       puts
       puts "This script orchestrates the medical records comparison workflow:"
-      puts "  Phase 0: Build page mappings"
-      puts "  Phase 1: SKIPPED (compare_docs.rb - record review content in TOC)"
-      puts "  Phase 2: Reconcile TOCs (simple_reconcile.rb)"
-      puts "  Phase 3: Convert Word document to PDF (if needed)"
+      puts "  Phase 1: Convert Word document to PDF (if needed)"
+      puts "  Phase 2: Build page mappings from hyperlinks (extract_hyperlinks.py)"
+      puts "  Phase 3: Reconcile TOCs (simple_reconcile.rb)"
       puts "  Phase 4: Match pages by content similarity (page_matcher.rb)"
       puts
       puts "Output:"

@@ -115,13 +115,16 @@ class YoursTOCParser
       if case_dir
         basename = File.basename(file_path, '.*')
         output_file = File.join(case_dir, "reports", "#{basename}_toc_extracted.txt")
-      else
-        output_file = file_path.gsub(/\.docx$/i, '_toc_extracted.txt')
-      end
-
-      unless File.exist?(output_file)
+        # Always regenerate - YOUR docs can change during testing
         puts "  Converting #{File.basename(file_path)} to text..."
         system("pandoc", file_path, "-t", "plain", "-o", output_file)
+      else
+        output_file = file_path.gsub(/\.docx$/i, '_toc_extracted.txt')
+        # Cache for non-case runs
+        unless File.exist?(output_file)
+          puts "  Converting #{File.basename(file_path)} to text..."
+          system("pandoc", file_path, "-t", "plain", "-o", output_file)
+        end
       end
       File.read(output_file, encoding: 'UTF-8', invalid: :replace, undef: :replace)
     else
@@ -181,6 +184,11 @@ class TheirsTOCParser
           l = lines[idx].strip
           next if l.match?(/^[\d\-,\s]+$/) # Skip page number lines
           next if l.empty?
+
+          # Remove page range prefix if it got concatenated (e.g., "235-240Parveen" -> "Parveen")
+          l = l.sub(/^\d+\s*-\s*\d+\s*/, '')
+          next if l.empty?
+
           header_lines << l
           break if header_lines.size >= 4
         end
@@ -189,7 +197,7 @@ class TheirsTOCParser
           date: normalized,
           date_str: date_str,
           pages: pages,
-          header: header_lines.join(", ")
+          header: header_lines.join(" ")  # Join with space instead of comma
         }
       elsif line.match?(/^Undated$/)
         normalized = "UNKNOWN"
@@ -208,6 +216,11 @@ class TheirsTOCParser
           l = lines[idx].strip
           next if l.match?(/^[\d\-,\s]+$/)
           next if l.empty?
+
+          # Remove page range prefix if it got concatenated
+          l = l.sub(/^\d+\s*-\s*\d+\s*/, '')
+          next if l.empty?
+
           header_lines << l
           break if header_lines.size >= 4
         end
@@ -216,7 +229,7 @@ class TheirsTOCParser
           date: normalized,
           date_str: "Undated",
           pages: pages,
-          header: header_lines.join(", ")
+          header: header_lines.join(" ")  # Join with space instead of comma
         }
       end
 
