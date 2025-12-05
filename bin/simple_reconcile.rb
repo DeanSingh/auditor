@@ -200,9 +200,6 @@ class TheirsTOCParser
         header_lines = []
 
         idx = i + 1
-        lines_after_date = 0
-        collecting_pages = true
-
         while idx < lines.length
           l = lines[idx].strip
 
@@ -210,7 +207,7 @@ class TheirsTOCParser
           break if l.match?(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/)
 
           # Stop at "Undated" marker (new entry)
-          break if l.match?(/^Undated$/)
+          break if l.match?(/^Undated$/i)
 
           # Skip empty lines
           if l.empty?
@@ -227,29 +224,21 @@ class TheirsTOCParser
             break
           end
 
-          lines_after_date += 1
+          # Determine what to do based on line content
+          if l.match?(/^[\d\-,\s]+$/)
+            # Line is ONLY page numbers (e.g., "253-257," or "322-324")
+            pages_lines << l
+          elsif l.match?(/^([\d\-,\s]+)(.+)$/)
+            # Line has pages + text (e.g., "322-324 Parveen")
+            page_part = l.match(/^([\d\-,\s]+)/)[1]
+            text_part = l.sub(/^[\d\-,\s]+/, '').strip
 
-          # Phase 1: First 2 non-empty lines - collect pages
-          if collecting_pages && lines_after_date <= 2
-            if l.match?(/^[\d\-,\s]+/)
-              # Extract pages: "235-240Parveen" -> "235-240"
-              page_part = l.match(/^([\d\-,\s]+)/)[1]
-              pages_lines << page_part
-
-              # Extract provider text after pages: "235-240Parveen" -> "Parveen"
-              text_part = l.sub(/^[\d\-,\s]+/, '').strip
-              unless text_part.empty?
-                header_lines << text_part
-              end
-            else
-              # Line starts with letter (provider name), stop collecting pages
-              collecting_pages = false
-              header_lines << l
+            pages_lines << page_part
+            unless text_part.empty?
+              header_lines << text_part
             end
-          # Phase 2: After first 2 lines - collect header only (provider name continuation)
           else
-            collecting_pages = false
-            # Collect short provider name lines
+            # Line is pure text (provider name/header)
             header_lines << l
           end
 
@@ -257,9 +246,9 @@ class TheirsTOCParser
         end
 
         # Parse all collected page number strings
-        pages_lines.each do |ps|
-          pages.concat(parse_page_numbers(ps))
-        end
+        # Join with space to handle split ranges (e.g., "253-" + "257," → "253- 257,")
+        combined_pages = pages_lines.join(" ")
+        pages.concat(parse_page_numbers(combined_pages))
         pages = pages.uniq.sort
 
         # Only add entry if it has pages (skip invalid date-only entries from index lists)
@@ -315,9 +304,9 @@ class TheirsTOCParser
         end
 
         # Parse all collected page number strings
-        pages_lines.each do |ps|
-          pages.concat(parse_page_numbers(ps))
-        end
+        # Join with space to handle split ranges (e.g., "253-" + "257," → "253- 257,")
+        combined_pages = pages_lines.join(" ")
+        pages.concat(parse_page_numbers(combined_pages))
         pages = pages.uniq.sort
 
         # Only add entry if it has pages (skip invalid entries)
@@ -342,7 +331,11 @@ class TheirsTOCParser
   def self.parse_page_numbers(pages_str)
     pages = []
 
-    pages_str.split(',').each do |part|
+    # First, handle split ranges: "253- 257" → "253-257"
+    # Remove spaces around hyphens: "253 - 257" or "253- 257" or "253 -257" → "253-257"
+    cleaned = pages_str.gsub(/\s*-\s*/, '-')
+
+    cleaned.split(',').each do |part|
       part = part.strip
       if part.match?(/^(\d+)-(\d+)$/)
         match = part.match(/^(\d+)-(\d+)$/)
