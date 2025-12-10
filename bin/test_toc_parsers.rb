@@ -182,6 +182,26 @@ class TestTheirsTOCParser < Minitest::Test
     assert_equal (29..45).to_a, entries[1][:pages]
     assert_includes entries[1][:header], "Deposition"
   end
+
+  def test_body_text_not_captured_as_pages
+    # Body text starting with years/numbers should not be captured as page numbers
+    text = <<~TEXT
+      03/25/24
+      29-45
+      Deposition of John Smith
+      1995 and they decided to move forward
+      0311, infantry unit designation
+      04/01/24
+      50-55
+      Next Entry
+    TEXT
+
+    entries = TheirsTOCParser.parse_text(text)
+    march_entry = entries.find { |e| e[:date] == "2024-03-25" }
+
+    refute_nil march_entry, "Should find 03/25/24 entry"
+    assert_equal (29..45).to_a, march_entry[:pages], "Should only capture page range 29-45, not body text starting with numbers"
+  end
 end
 
 class TestYoursTOCParser < Minitest::Test

@@ -239,8 +239,15 @@ class TheirsTOCParser
     while i < lines.length
       line = lines[i].strip
 
-      # Look for date pattern
+      # Look for date pattern - but only process if it's a real TOC entry (has pages)
       if line.match?(/^(\d{1,2}\/\d{1,2}\/\d{2,4})$/)
+        # Check if this is a real TOC entry or just a date in excerpt text
+        unless is_toc_boundary?(lines, i)
+          # Date in excerpt text - skip it
+          i += 1
+          next
+        end
+
         date_str = line
         normalized = normalize_date(date_str)
 
@@ -282,17 +289,16 @@ class TheirsTOCParser
             next
           end
 
-          # If line starts with page numbers, collect them
-          if l.match?(/^[\d\-,\s]+/)
-            page_part = l.match(/^([\d\-,\s]+)/)[1]
-            pages_lines << page_part
-
-            # Also grab any text after the pages on same line (max 5 header lines)
-            text_part = l.sub(/^[\d\-,\s]+/, '').strip
-            unless text_part.empty?
-              if header_lines.length < 5
-                header_lines << text_part
-              end
+          # If line is entirely page numbers, collect them
+          # Only match lines that contain ONLY digits, hyphens, commas, and spaces
+          if l.match?(/^[\d\-,\s]+$/)
+            pages_lines << l
+          elsif l.match?(/^([\d\-,]+)([A-Z][a-z]+)/)
+            # Handle concatenated case: "235-240Parveen"
+            match = l.match(/^([\d\-,]+)([A-Z].*)/)
+            pages_lines << match[1]
+            if header_lines.length < 5
+              header_lines << match[2]
             end
           else
             # Line is header text (provider name, etc) - max 5 header lines
@@ -365,18 +371,16 @@ class TheirsTOCParser
             next
           end
 
-          # Extract page numbers and provider text from line
-          if l.match?(/^([\d\-,\s]+)/)
-            # Extract pages: "235-240Parveen" -> "235-240"
-            page_part = l.match(/^([\d\-,\s]+)/)[1]
-            pages_lines << page_part
-
-            # Extract provider text after pages: "235-240Parveen" -> "Parveen" (max 5 header lines)
-            text_part = l.sub(/^[\d\-,\s]+/, '').strip
-            unless text_part.empty?
-              if header_lines.length < 5
-                header_lines << text_part
-              end
+          # If line is entirely page numbers, collect them
+          # Only match lines that contain ONLY digits, hyphens, commas, and spaces
+          if l.match?(/^[\d\-,\s]+$/)
+            pages_lines << l
+          elsif l.match?(/^([\d\-,]+)([A-Z][a-z]+)/)
+            # Handle concatenated case: "235-240Parveen"
+            match = l.match(/^([\d\-,]+)([A-Z].*)/)
+            pages_lines << match[1]
+            if header_lines.length < 5
+              header_lines << match[2]
             end
           else
             # Line has no page numbers - collect as provider text (max 5 header lines)
