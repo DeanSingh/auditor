@@ -57,6 +57,16 @@ end
 # Parse TOC entries from your indexed document (extracted text or docx)
 class YoursTOCParser
   extend TOCParserUtils
+
+  MONTH_MAP = {
+    'january' => 1, 'february' => 2, 'march' => 3, 'april' => 4,
+    'may' => 5, 'june' => 6, 'july' => 7, 'august' => 8,
+    'september' => 9, 'october' => 10, 'november' => 11, 'december' => 12
+  }.freeze
+
+  MONTH_NAMES = MONTH_MAP.keys.join('|').freeze
+  FULL_MONTH_PATTERN = /^\|\s*(#{MONTH_NAMES})\s+(\d{1,2}),\s+(\d{4})\s*\|/i.freeze
+
   def self.parse(file_path, case_dir: nil)
     content = extract_text(file_path, case_dir: case_dir)
     parse_text(content)
@@ -70,16 +80,28 @@ class YoursTOCParser
     while i < lines.length
       line = lines[i]
 
+      # Pattern: Full written date on single line
+      # Example: "| September 28, 2023 | ..."
+      if (match = line.match(FULL_MONTH_PATTERN))
+        month = MONTH_MAP[match[1].downcase]
+        date_str = "#{month}/#{match[2]}/#{match[3]}"
+        add_entry(entries, lines, i, 0, date_str)
+      # Pattern: Month name split across 4 lines
+      # Example: "| Sept |" + "| ember |" + "| 28, |" + "| 2023 |"
+      elsif line.match?(/^\|\s*[A-Za-z]{3,5}\s*\|/)
+        parsed = try_parse_split_month(lines, i)
+        if parsed
+          date_str = "#{parsed[:month]}/#{parsed[:day]}/#{parsed[:year]}"
+          add_entry(entries, lines, i, 3, date_str)
+        end
       # Pattern: ISO date split across lines - YYYY- on line 1, MM-DD on line 2
       # Example: "| 2024- | ..." followed by "| 03-25 | ..."
-      if line.match?(/^\|\s*(\d{4})-\s*\|/)
-        match = line.match(/^\|\s*(\d{4})-\s*\|/)
+      elsif (match = line.match(/^\|\s*(\d{4})-\s*\|/))
         year = match[1]
 
         # Check next line for MM-DD
         next_line = i + 1 < lines.length ? lines[i + 1] : ""
-        if next_line.match?(/^\|\s*(\d{2})-(\d{2})\s*\|/)
-          md_match = next_line.match(/^\|\s*(\d{2})-(\d{2})\s*\|/)
+        if (md_match = next_line.match(/^\|\s*(\d{2})-(\d{2})\s*\|/))
           month = md_match[1]
           day = md_match[2]
           date_str = "#{month}/#{day}/#{year}"
@@ -132,6 +154,38 @@ class YoursTOCParser
   end
 
   private
+
+  def self.try_parse_split_month(lines, start_idx)
+    # Collect up to 4 lines and extract first cell content from each
+    parts = []
+    (0..3).each do |offset|
+      line = lines[start_idx + offset] || ""
+      if (m = line.match(/^\|\s*([^|]*?)\s*\|/))
+        parts << m[1].strip
+      else
+        break
+      end
+    end
+
+    return nil if parts.length < 4
+
+    # Try to reassemble: "Sept" + "ember" = "September", "Oct" + "ober" = "October", etc.
+    candidate_month = (parts[0] + parts[1]).downcase
+    month_num = MONTH_MAP[candidate_month]
+    return nil unless month_num
+
+    # parts[2] should be day (with optional comma): "28," or "28"
+    day_match = parts[2].match(/^(\d{1,2}),?$/)
+    return nil unless day_match
+    day = day_match[1].to_i
+
+    # parts[3] should be year: "2023"
+    year_match = parts[3].match(/^(\d{4})$/)
+    return nil unless year_match
+    year = year_match[1].to_i
+
+    { month: month_num, day: day, year: year }
+  end
 
   def self.add_entry(entries, lines, start_idx, skip_lines, date_str, date: nil)
     # Extract header and pages
@@ -254,9 +308,11 @@ class TheirsTOCParser
         # Collect page numbers from multiple lines (they may be split)
         # Example: "208," on one line, "219-221" on next
         # Scan until boundary (next date, Undated, or EOF)
+        # IMPORTANT: Stop collecting pages after first header line (prevents phone numbers/CPT codes)
         pages = []
         pages_lines = []
         header_lines = []
+        found_header = false  # Track when we've moved past pages into header content
 
         idx = i + 1
         while idx < lines.length
@@ -269,6 +325,7 @@ class TheirsTOCParser
           elsif l.match?(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/)
             # Date without pages - just excerpt text, treat as header
             header_lines << l if header_lines.length < 5
+            found_header = true
             idx += 1
             next
           end
@@ -285,23 +342,26 @@ class TheirsTOCParser
           if l.match?(/\d+\/\d+/)
             # This is a date in content, not page numbers - treat as header
             header_lines << l
+            found_header = true
             idx += 1
             next
           end
 
-          # If line is entirely page numbers, collect them
+          # If line is entirely page numbers AND we haven't seen header yet, collect them
           # Only match lines that contain ONLY digits, hyphens, commas, and spaces
-          if l.match?(/^[\d\-,\s]+$/)
+          if !found_header && l.match?(/^[\d\-,\s]+$/)
             pages_lines << l
           elsif l.match?(/^([\d\-,]+)([A-Z][a-z]+)/)
             # Handle concatenated case: "235-240Parveen"
             match = l.match(/^([\d\-,]+)([A-Z].*)/)
-            pages_lines << match[1]
+            pages_lines << match[1] unless found_header
             if header_lines.length < 5
               header_lines << match[2]
             end
+            found_header = true
           else
-            # Line is header text (provider name, etc) - max 5 header lines
+            # Line is header text (provider name, etc) - stop collecting pages
+            found_header = true
             if header_lines.length < 5
               header_lines << l
             end
@@ -330,13 +390,18 @@ class TheirsTOCParser
             header: header
           }
         end
+
+        # Jump to where inner loop stopped to avoid re-scanning consumed lines
+        i = idx - 1  # -1 because loop will do i += 1 at the end
       elsif line.match?(/^Undated$/)
         normalized = "UNKNOWN"
 
         # Scan until boundary (next date, another Undated, or EOF)
+        # IMPORTANT: Stop collecting pages after first header line (prevents phone numbers/CPT codes)
         pages = []
         pages_lines = []
         header_lines = []
+        found_header = false  # Track when we've moved past pages into header content
 
         idx = i + 1
         while idx < lines.length
@@ -349,6 +414,7 @@ class TheirsTOCParser
           elsif l.match?(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/)
             # Date without pages - just excerpt text, treat as header
             header_lines << l if header_lines.length < 5
+            found_header = true
             idx += 1
             next
           end
@@ -367,23 +433,26 @@ class TheirsTOCParser
           if l.match?(/\d+\/\d+/)
             # This is a date in content, not page numbers - treat as header
             header_lines << l
+            found_header = true
             idx += 1
             next
           end
 
-          # If line is entirely page numbers, collect them
+          # If line is entirely page numbers AND we haven't seen header yet, collect them
           # Only match lines that contain ONLY digits, hyphens, commas, and spaces
-          if l.match?(/^[\d\-,\s]+$/)
+          if !found_header && l.match?(/^[\d\-,\s]+$/)
             pages_lines << l
           elsif l.match?(/^([\d\-,]+)([A-Z][a-z]+)/)
             # Handle concatenated case: "235-240Parveen"
             match = l.match(/^([\d\-,]+)([A-Z].*)/)
-            pages_lines << match[1]
+            pages_lines << match[1] unless found_header
             if header_lines.length < 5
               header_lines << match[2]
             end
+            found_header = true
           else
-            # Line has no page numbers - collect as provider text (max 5 header lines)
+            # Line has no page numbers - collect as provider text (stop collecting pages)
+            found_header = true
             if header_lines.length < 5
               header_lines << l
             end
@@ -412,6 +481,9 @@ class TheirsTOCParser
             header: header
           }
         end
+
+        # Jump to where inner loop stopped to avoid re-scanning consumed lines
+        i = idx - 1  # -1 because loop will do i += 1 at the end
       end
 
       i += 1

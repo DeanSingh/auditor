@@ -1,6 +1,8 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+ENV['MT_NO_PLUGINS'] = '1'
+
 require 'minitest/autorun'
 require_relative 'simple_reconcile'
 
@@ -202,6 +204,47 @@ class TestTheirsTOCParser < Minitest::Test
     refute_nil march_entry, "Should find 03/25/24 entry"
     assert_equal (29..45).to_a, march_entry[:pages], "Should only capture page range 29-45, not body text starting with numbers"
   end
+
+  def test_entries_with_large_gap
+    # Regression test for loop index bug - two entries with many lines between them
+    # Bug: parser would re-scan consumed lines instead of jumping to next boundary
+    gap = "Some random content line\n" * 100
+    text = "03/25/24\n29-45\nFirst Entry Header\n#{gap}10/30/24\n1-6\nCover Letter\n"
+
+    entries = TheirsTOCParser.parse_text(text)
+
+    assert_equal 2, entries.length, "Should find both entries despite large gap"
+    assert_equal "2024-03-25", entries[0][:date]
+    assert_equal (29..45).to_a, entries[0][:pages]
+    assert_equal "2024-10-30", entries[1][:date]
+    assert_equal [1, 2, 3, 4, 5, 6], entries[1][:pages]
+    assert_includes entries[1][:header], "Cover Letter"
+  end
+
+  def test_phone_number_not_parsed_as_pages
+    # Regression test for phone number bug
+    # Bug: Parser kept collecting "page-like" lines (all digits/hyphens) hundreds of lines
+    # after the actual pages, picking up phone numbers and CPT codes
+    text = <<~TEXT
+      10/30/24
+      1-6
+      Cover Letter to Dr. McDonald
+      707-427-4025
+      99213
+      Next entry starts here
+      03/25/24
+      29-45
+      Another Entry
+    TEXT
+
+    entries = TheirsTOCParser.parse_text(text)
+
+    assert_equal 2, entries.length
+    # First entry should only have pages 1-6, NOT 707, 427, 4025, or 99213
+    assert_equal [1, 2, 3, 4, 5, 6], entries[0][:pages]
+    refute_includes entries[0][:pages], 707, "Should not parse phone number as page"
+    refute_includes entries[0][:pages], 99213, "Should not parse CPT code as page"
+  end
 end
 
 class TestYoursTOCParser < Minitest::Test
@@ -305,6 +348,79 @@ class TestYoursTOCParser < Minitest::Test
     assert_equal "2024-03-25", entries[0][:date]
     assert_equal [29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45], entries[0][:pages]
     assert_includes entries[0][:header], "Videoconference"
+  end
+
+  def test_month_name_split_across_four_lines
+    # Month name split: "Sept" / "ember" / "28," / "2023"
+    content = <<~TABLE
+      | Sept  | GA      | [FILTERED] Category: Legal Documents | | 20, 21, |
+      | ember | LLAGHER | Sub-Category: Claims                   | 22      |
+      | 28,   | BASSETT |                                        |         |
+      | 2023  |         |                                        |         |
+      +-------+---------+----------------------------------------+---------+
+    TABLE
+
+    entries = YoursTOCParser.parse_text(content)
+
+    assert_equal 1, entries.length, "Should parse month name split across 4 lines"
+    assert_equal "2023-09-28", entries[0][:date]
+    assert_equal [20, 21, 22], entries[0][:pages]
+    # Header comes from column 3 only
+    assert_includes entries[0][:header], "FILTERED"
+  end
+
+  def test_page_marker_stops_header_collection
+    # Header should stop when "Page N –" marker is encountered
+    content = <<~TABLE
+      | 2024- | Esquire   | March 25, 2024, Deposition | 29, 30, |
+      | 03-25 | Deposition| of Jonathan Rosales        | 31, 32  |
+      |       |           | Page 29 – He started       |         |
+      |       |           | working at Sentinel on     |         |
+      |       |           | January 3rd, 2023.         |         |
+      +-------+-----------+----------------------------+---------+
+    TABLE
+
+    entries = YoursTOCParser.parse_text(content)
+
+    assert_equal 1, entries.length
+    assert_equal "2024-03-25", entries[0][:date]
+    assert_equal [29, 30, 31, 32], entries[0][:pages]
+    # Header should stop before "Page 29 –" marker
+    refute_includes entries[0][:header], "Page 29", "Header should stop at page marker"
+    refute_includes entries[0][:header], "He started", "Should not include text after page marker"
+  end
+
+  def test_single_digit_month_day
+    # Single digit month and day: "1/4"
+    content = <<~TABLE
+      | 1/4   |          |                    |         |
+      | /2024 |          |                    |         |
+      |       |          | Medical Report     |         |
+      |       |          |                    | 178     |
+      +-------+----------+--------------------+---------+
+    TABLE
+
+    entries = YoursTOCParser.parse_text(content)
+
+    assert_equal 1, entries.length, "Should parse single digit month/day"
+    assert_equal "2024-01-04", entries[0][:date]
+    assert_equal [178], entries[0][:pages]
+    assert_includes entries[0][:header], "Medical Report"
+  end
+
+  def test_written_month_full_single_line
+    # Full written date on single line: "September 28, 2023"
+    content = <<~TABLE
+      | September 28, 2023 | GALLAGHER | Claims    | 20, 21 |
+      |                    | BASSETT   |           |        |
+      +--------------------+-----------+-----------+--------+
+    TABLE
+
+    entries = YoursTOCParser.parse_text(content)
+
+    assert_equal 1, entries.length, "Should parse written month on single line"
+    assert_equal "2023-09-28", entries[0][:date]
+    assert_equal [20, 21], entries[0][:pages]
   end
 end
 
