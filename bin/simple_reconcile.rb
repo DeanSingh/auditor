@@ -5,8 +5,58 @@ require 'date'
 require 'json'
 require 'set'
 
+# Shared utilities for TOC parsing
+module TOCParserUtils
+  def truncate_header(text, max_length = 150)
+    return text if text.length <= max_length
+    truncated = text[0...max_length]
+    last_space = truncated.rindex(' ')
+    last_space ? text[0...last_space] : truncated
+  end
+
+  def normalize_date(date_str)
+    return "UNKNOWN" if date_str == "Undated" || date_str.nil? || date_str.empty?
+
+    begin
+      parts = date_str.split('/')
+      month = parts[0].to_i
+      day = parts[1].to_i
+      year = parts[2].to_i
+
+      year += 2000 if year < 100
+
+      Date.new(year, month, day).strftime("%Y-%m-%d")
+    rescue ArgumentError
+      "UNKNOWN"
+    end
+  end
+
+  def parse_page_numbers(pages_str)
+    pages = []
+
+    # First, handle split ranges: "253- 257" → "253-257"
+    # Remove spaces around hyphens: "253 - 257" or "253- 257" or "253 -257" → "253-257"
+    cleaned = pages_str.gsub(/\s*-\s*/, '-')
+
+    cleaned.split(',').each do |part|
+      part = part.strip
+      if part.match?(/^(\d+)-(\d+)$/)
+        match = part.match(/^(\d+)-(\d+)$/)
+        start_page = match[1].to_i
+        end_page = match[2].to_i
+        (start_page..end_page).each { |p| pages << p }
+      elsif part.match?(/^\d+$/)
+        pages << part.to_i
+      end
+    end
+
+    pages.uniq.sort
+  end
+end
+
 # Parse TOC entries from your indexed document (extracted text or docx)
 class YoursTOCParser
+  extend TOCParserUtils
   def self.parse(file_path, case_dir: nil)
     content = extract_text(file_path, case_dir: case_dir)
     parse_text(content)
@@ -20,9 +70,25 @@ class YoursTOCParser
     while i < lines.length
       line = lines[i]
 
+      # Pattern: ISO date split across lines - YYYY- on line 1, MM-DD on line 2
+      # Example: "| 2024- | ..." followed by "| 03-25 | ..."
+      if line.match?(/^\|\s*(\d{4})-\s*\|/)
+        match = line.match(/^\|\s*(\d{4})-\s*\|/)
+        year = match[1]
+
+        # Check next line for MM-DD
+        next_line = i + 1 < lines.length ? lines[i + 1] : ""
+        if next_line.match?(/^\|\s*(\d{2})-(\d{2})\s*\|/)
+          md_match = next_line.match(/^\|\s*(\d{2})-(\d{2})\s*\|/)
+          month = md_match[1]
+          day = md_match[2]
+          date_str = "#{month}/#{day}/#{year}"
+
+          add_entry(entries, lines, i, 1, date_str)
+        end
       # Pattern: MM/DD on one line, /YYYY on next line
       # Example: "| 10/06 | ..." followed by "| /2025 | ..."
-      if line.match?(/^\|\s*(\d{1,2})\/(\d{1,2})\s*\|/)
+      elsif line.match?(/^\|\s*(\d{1,2})\/(\d{1,2})\s*\|/)
         match = line.match(/^\|\s*(\d{1,2})\/(\d{1,2})\s*\|/)
         month = match[1]
         day = match[2]
@@ -33,20 +99,7 @@ class YoursTOCParser
           year = next_line.match(/^\|\s*\/(\d{2,4})\s*\|/)[1]
           date_str = "#{month}/#{day}/#{year}"
 
-          # Extract header and pages (MM/DD + /YYYY = skip 1 line)
-          data = extract_entry_data(lines, i, 1)
-
-          normalized_date = normalize_date(date_str)
-          # Use first(1) to avoid duplicate text from table cells
-          header = data[:header_lines].first(1).join(" ").strip
-          header = truncate_header(header)
-
-          entries << {
-            date: normalized_date,
-            date_str: date_str,
-            pages: data[:page_nums].uniq.sort,
-            header: header
-          }
+          add_entry(entries, lines, i, 1, date_str)
         end
       # Pattern: Split date - MM/ on line 1, DD on line 2, /YYYY on line 3
       elsif line.match?(/^\|\s*(\d{1,2})\/\s*\|/)
@@ -64,39 +117,12 @@ class YoursTOCParser
             year = year_line.match(/^\|\s*\/(\d{2,4})\s*\|/)[1]
             date_str = "#{month}/#{day}/#{year}"
 
-            # Extract header and pages (MM/ + DD + /YYYY = skip 2 lines)
-            data = extract_entry_data(lines, i, 2)
-
-            normalized_date = normalize_date(date_str)
-            # Use first(1) to avoid duplicate text from table cells
-            header = data[:header_lines].first(1).join(" ").strip
-            header = truncate_header(header)
-
-            entries << {
-              date: normalized_date,
-              date_str: date_str,
-              pages: data[:page_nums].uniq.sort,
-              header: header
-            }
+            add_entry(entries, lines, i, 2, date_str)
           end
         end
       # Pattern: Unknown date entries
       elsif line.match?(/^\|\s*Un\s*\|/) || line.match?(/^\|\s*unknown\s*\|/i)
-        # Extract header and pages (Unknown = skip 0 lines)
-        data = extract_entry_data(lines, i, 0)
-
-        unless data[:page_nums].empty?
-          # Use first(1) to avoid duplicate text from table cells
-          header = data[:header_lines].first(1).join(" ").strip
-          header = truncate_header(header)
-
-          entries << {
-            date: "UNKNOWN",
-            date_str: "Unknown",
-            pages: data[:page_nums].uniq.sort,
-            header: header
-          }
-        end
+        add_entry(entries, lines, i, 0, "Unknown", date: "UNKNOWN")
       end
 
       i += 1
@@ -107,11 +133,25 @@ class YoursTOCParser
 
   private
 
-  def self.truncate_header(text, max_length = 150)
-    return text if text.length <= max_length
-    truncated = text[0...max_length]
-    last_space = truncated.rindex(' ')
-    last_space ? text[0...last_space] : truncated
+  def self.add_entry(entries, lines, start_idx, skip_lines, date_str, date: nil)
+    # Extract header and pages
+    data = extract_entry_data(lines, start_idx, skip_lines)
+
+    # Only add entry if it has pages (for Unknown dates)
+    return if data[:page_nums].empty? && date == "UNKNOWN"
+
+    # Use first(1) to avoid duplicate text from table cells
+    header = data[:header_lines].first(1).join(" ").strip
+    header = truncate_header(header)
+
+    normalized_date = date || normalize_date(date_str)
+
+    entries << {
+      date: normalized_date,
+      date_str: date_str,
+      pages: data[:page_nums].uniq.sort,
+      header: header
+    }
   end
 
   def self.extract_entry_data(lines, start_idx, skip_lines)
@@ -143,16 +183,7 @@ class YoursTOCParser
       # Extract page numbers from last column (supports ranges like "178-191")
       if l.match?(/\|\s*([\d,\s\-]+)\s*\|?\s*$/)
         pages_match = l.match(/\|\s*([\d,\s\-]+)\s*\|?\s*$/)
-        # Parse ranges: "178-191" -> [178, 179, ..., 191]
-        pages_match[1].split(',').each do |part|
-          part = part.strip
-          if part.match?(/^(\d+)-(\d+)$/)
-            range_match = part.match(/^(\d+)-(\d+)$/)
-            (range_match[1].to_i..range_match[2].to_i).each { |p| page_nums << p }
-          elsif part.match?(/^\d+$/)
-            page_nums << part.to_i
-          end
-        end
+        page_nums.concat(parse_page_numbers(pages_match[1]))
       end
 
       idx += 1
@@ -189,27 +220,11 @@ class YoursTOCParser
       exit 1
     end
   end
-
-  def self.normalize_date(date_str)
-    return "UNKNOWN" if date_str.nil? || date_str.empty?
-
-    begin
-      parts = date_str.split('/')
-      month = parts[0].to_i
-      day = parts[1].to_i
-      year = parts[2].to_i
-
-      year += 2000 if year < 100
-
-      Date.new(year, month, day).strftime("%Y-%m-%d")
-    rescue ArgumentError
-      "UNKNOWN"
-    end
-  end
 end
 
 # Parse TOC entries from vendor's indexed PDF
 class TheirsTOCParser
+  extend TOCParserUtils
   def self.parse(pdf_path)
     # ONLY parse first 25 pages - TOC should be at front of PDF
     text = `mutool draw -F txt "#{pdf_path}" 1-25 2>&1`.force_encoding('UTF-8')
@@ -241,7 +256,15 @@ class TheirsTOCParser
           l = lines[idx].strip
 
           # Stop at next date or Undated (new entry starts)
-          break if l.match?(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/)
+          # But check if it's a real TOC entry (has pages) vs date in excerpt text
+          if is_toc_boundary?(lines, idx)
+            break
+          elsif l.match?(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/)
+            # Date without pages - just excerpt text, treat as header
+            header_lines << l if header_lines.length < 5
+            idx += 1
+            next
+          end
           break if l.match?(/^Undated$/)
 
           # Skip empty lines
@@ -314,7 +337,15 @@ class TheirsTOCParser
           l = lines[idx].strip
 
           # Stop at next date pattern (new entry) - check BEFORE processing
-          break if l.match?(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/)
+          # But check if it's a real TOC entry (has pages) vs date in excerpt text
+          if is_toc_boundary?(lines, idx)
+            break
+          elsif l.match?(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/)
+            # Date without pages - just excerpt text, treat as header
+            header_lines << l if header_lines.length < 5
+            idx += 1
+            next
+          end
 
           # Stop at another "Undated" marker (new entry)
           break if l.match?(/^Undated$/)
@@ -387,50 +418,20 @@ class TheirsTOCParser
 
   private
 
-  def self.truncate_header(text, max_length = 150)
-    return text if text.length <= max_length
-    truncated = text[0...max_length]
-    last_space = truncated.rindex(' ')
-    last_space ? text[0...last_space] : truncated
-  end
+  def self.is_toc_boundary?(lines, idx)
+    # Check if this line is a real TOC entry boundary (date followed by pages)
+    # vs just a date in excerpt text
+    l = lines[idx].strip
 
-  def self.parse_page_numbers(pages_str)
-    pages = []
+    # Check for date pattern
+    return false unless l.match?(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/)
 
-    # First, handle split ranges: "253- 257" → "253-257"
-    # Remove spaces around hyphens: "253 - 257" or "253- 257" or "253 -257" → "253-257"
-    cleaned = pages_str.gsub(/\s*-\s*/, '-')
+    # Look ahead 2 lines for page numbers to confirm this is a real TOC entry
+    next_1 = (idx + 1 < lines.length) ? lines[idx + 1].strip : ""
+    next_2 = (idx + 2 < lines.length) ? lines[idx + 2].strip : ""
 
-    cleaned.split(',').each do |part|
-      part = part.strip
-      if part.match?(/^(\d+)-(\d+)$/)
-        match = part.match(/^(\d+)-(\d+)$/)
-        start_page = match[1].to_i
-        end_page = match[2].to_i
-        (start_page..end_page).each { |p| pages << p }
-      elsif part.match?(/^\d+$/)
-        pages << part.to_i
-      end
-    end
-
-    pages.uniq.sort
-  end
-
-  def self.normalize_date(date_str)
-    return "UNKNOWN" if date_str == "Undated" || date_str.nil? || date_str.empty?
-
-    begin
-      parts = date_str.split('/')
-      month = parts[0].to_i
-      day = parts[1].to_i
-      year = parts[2].to_i
-
-      year += 2000 if year < 100
-
-      Date.new(year, month, day).strftime("%Y-%m-%d")
-    rescue ArgumentError
-      "UNKNOWN"
-    end
+    # Has pages if either next line starts with page numbers
+    next_1.match?(/^[\d\-,\s]+/) || next_2.match?(/^[\d\-,\s]+/)
   end
 end
 

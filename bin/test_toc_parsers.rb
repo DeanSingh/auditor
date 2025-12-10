@@ -157,6 +157,31 @@ class TestTheirsTOCParser < Minitest::Test
     assert_equal [20, 21, 22], entries[0][:pages]  # NOT [1, 20, 21, 22]
     refute_includes entries[0][:pages], 1, "Should not parse '01' from date as a page number"
   end
+
+  def test_date_in_excerpt_not_boundary
+    # Date appears twice: once in TOC column, once in excerpt column
+    # The second occurrence should NOT be treated as a new TOC entry boundary
+    text = <<~TEXT
+      03/12/24
+      209-210
+      Kaiser Permanente
+      03/12/24
+      Gave second dose
+      03/25/24
+      29-45
+      Deposition
+    TEXT
+
+    entries = TheirsTOCParser.parse_text(text)
+
+    assert_equal 2, entries.length, "Should parse both entries, not treat excerpt date as boundary"
+    assert_equal "2024-03-12", entries[0][:date]
+    assert_equal [209, 210], entries[0][:pages]
+    assert_includes entries[0][:header], "Kaiser Permanente"
+    assert_equal "2024-03-25", entries[1][:date]
+    assert_equal (29..45).to_a, entries[1][:pages]
+    assert_includes entries[1][:header], "Deposition"
+  end
 end
 
 class TestYoursTOCParser < Minitest::Test
@@ -238,6 +263,28 @@ class TestYoursTOCParser < Minitest::Test
     assert_equal 1, entries.length, "Should parse split date across lines"
     assert_equal "2022-08-11", entries[0][:date]
     assert_equal [67, 68], entries[0][:pages]
+  end
+
+  def test_iso_date_format_split_across_lines
+    # ISO date format: YYYY- on line 1, MM-DD on line 2
+    content = <<~TABLE
+      | 2024- | Esquire | Videoconference    | 29, 30, |
+      | 03-25 | Dep     | Deposition of      | 31, 32, |
+      |       | osition | Jonathan Rosales   | 33, 34, |
+      |       |         |                    | 35, 36, |
+      |       |         |                    | 37, 38, |
+      |       |         |                    | 39, 40, |
+      |       |         |                    | 41, 43, |
+      |       |         |                    | 44, 45  |
+      +-------+---------+--------------------+---------+
+    TABLE
+
+    entries = YoursTOCParser.parse_text(content)
+
+    assert_equal 1, entries.length, "Should parse ISO date format"
+    assert_equal "2024-03-25", entries[0][:date]
+    assert_equal [29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45], entries[0][:pages]
+    assert_includes entries[0][:header], "Videoconference"
   end
 end
 
