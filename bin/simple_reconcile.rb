@@ -8,8 +8,12 @@ require 'set'
 # Parse TOC entries from your indexed document (extracted text or docx)
 class YoursTOCParser
   def self.parse(file_path, case_dir: nil)
-    entries = []
     content = extract_text(file_path, case_dir: case_dir)
+    parse_text(content)
+  end
+
+  def self.parse_text(content)
+    entries = []
     lines = content.split("\n")
 
     i = 0
@@ -58,10 +62,19 @@ class YoursTOCParser
               header_lines << text unless text.empty?
             end
 
-            # Extract page numbers from last column
-            if l.match?(/\|\s*([\d,\s]+)\s*\|?\s*$/)
-              pages_match = l.match(/\|\s*([\d,\s]+)\s*\|?\s*$/)
-              page_nums.concat(pages_match[1].scan(/\d+/).map(&:to_i))
+            # Extract page numbers from last column (supports ranges like "178-191")
+            if l.match?(/\|\s*([\d,\s\-]+)\s*\|?\s*$/)
+              pages_match = l.match(/\|\s*([\d,\s\-]+)\s*\|?\s*$/)
+              # Parse ranges: "178-191" -> [178, 179, ..., 191]
+              pages_match[1].split(',').each do |part|
+                part = part.strip
+                if part.match?(/^(\d+)-(\d+)$/)
+                  range_match = part.match(/^(\d+)-(\d+)$/)
+                  (range_match[1].to_i..range_match[2].to_i).each { |p| page_nums << p }
+                elsif part.match?(/^\d+$/)
+                  page_nums << part.to_i
+                end
+              end
             end
 
             idx += 1
@@ -102,10 +115,19 @@ class YoursTOCParser
             header_lines << text unless text.empty?
           end
 
-          # Extract page numbers from last column
-          if l.match?(/\|\s*([\d,\s]+)\s*\|?\s*$/)
-            pages_match = l.match(/\|\s*([\d,\s]+)\s*\|?\s*$/)
-            page_nums.concat(pages_match[1].scan(/\d+/).map(&:to_i))
+          # Extract page numbers from last column (supports ranges like "178-191")
+          if l.match?(/\|\s*([\d,\s\-]+)\s*\|?\s*$/)
+            pages_match = l.match(/\|\s*([\d,\s\-]+)\s*\|?\s*$/)
+            # Parse ranges: "178-191" -> [178, 179, ..., 191]
+            pages_match[1].split(',').each do |part|
+              part = part.strip
+              if part.match?(/^(\d+)-(\d+)$/)
+                range_match = part.match(/^(\d+)-(\d+)$/)
+                (range_match[1].to_i..range_match[2].to_i).each { |p| page_nums << p }
+              elsif part.match?(/^\d+$/)
+                page_nums << part.to_i
+              end
+            end
           end
 
           idx += 1
@@ -179,8 +201,13 @@ end
 # Parse TOC entries from vendor's indexed PDF
 class TheirsTOCParser
   def self.parse(pdf_path)
+    # ONLY parse first 25 pages - TOC should be at front of PDF
+    text = `mutool draw -F txt "#{pdf_path}" 1-25 2>&1`.force_encoding('UTF-8')
+    parse_text(text)
+  end
+
+  def self.parse_text(text)
     entries = []
-    text = `mutool draw -F txt "#{pdf_path}" 2>&1`.force_encoding('UTF-8')
     lines = text.split("\n")
 
     i = 0
@@ -203,11 +230,9 @@ class TheirsTOCParser
         while idx < lines.length
           l = lines[idx].strip
 
-          # Stop at next date pattern (new entry)
+          # Stop at next date or Undated (new entry starts)
           break if l.match?(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/)
-
-          # Stop at "Undated" marker (new entry)
-          break if l.match?(/^Undated$/i)
+          break if l.match?(/^Undated$/)
 
           # Skip empty lines
           if l.empty?
@@ -215,30 +240,16 @@ class TheirsTOCParser
             next
           end
 
-          # Stop if we hit summary excerpt (medical content keywords or colon patterns)
-          if l.match?(/^(SUBJECTIVE|OBJECTIVE|HISTORY|CHIEF|DIAGNOSIS|ASSESSMENT|TREATMENT|PLAN|DOI:|Patient (presents|complains|reports|states)|Received for)/i)
-            break
-          end
-          # Stop if line contains summary pattern (colon followed by description)
-          if l.match?(/:\s+[A-Z]/) || l.match?(/\.\s+[A-Z]/)
-            break
-          end
-
-          # Determine what to do based on line content
-          if l.match?(/^[\d\-,\s]+$/)
-            # Line is ONLY page numbers (e.g., "253-257," or "322-324")
-            pages_lines << l
-          elsif l.match?(/^([\d\-,\s]+)(.+)$/)
-            # Line has pages + text (e.g., "322-324 Parveen")
+          # If line starts with page numbers, collect them
+          if l.match?(/^[\d\-,\s]+/)
             page_part = l.match(/^([\d\-,\s]+)/)[1]
-            text_part = l.sub(/^[\d\-,\s]+/, '').strip
-
             pages_lines << page_part
-            unless text_part.empty?
-              header_lines << text_part
-            end
+
+            # Also grab any text after the pages on same line
+            text_part = l.sub(/^[\d\-,\s]+/, '').strip
+            header_lines << text_part unless text_part.empty?
           else
-            # Line is pure text (provider name/header)
+            # Line is header text (provider name, etc)
             header_lines << l
           end
 
@@ -249,15 +260,20 @@ class TheirsTOCParser
         # Join with space to handle split ranges (e.g., "253-" + "257," → "253- 257,")
         combined_pages = pages_lines.join(" ")
         pages.concat(parse_page_numbers(combined_pages))
-        pages = pages.uniq.sort
+        # Reject invalid page numbers > 500 (catches CPT codes like 98940, addresses like 811/923)
+        pages = pages.select { |p| p <= 500 }.uniq.sort
 
         # Only add entry if it has pages (skip invalid date-only entries from index lists)
         unless pages.empty?
+          # Truncate header to reasonable length
+          header = header_lines.join(" ")
+          header = header[0..150] if header.length > 150  # Max 150 chars
+
           entries << {
             date: normalized,
             date_str: date_str,
             pages: pages,
-            header: header_lines.join(" ")  # Join with space instead of comma
+            header: header
           }
         end
       elsif line.match?(/^Undated$/)
@@ -307,15 +323,20 @@ class TheirsTOCParser
         # Join with space to handle split ranges (e.g., "253-" + "257," → "253- 257,")
         combined_pages = pages_lines.join(" ")
         pages.concat(parse_page_numbers(combined_pages))
-        pages = pages.uniq.sort
+        # Reject invalid page numbers > 500 (catches CPT codes like 98940, addresses like 811/923)
+        pages = pages.select { |p| p <= 500 }.uniq.sort
 
         # Only add entry if it has pages (skip invalid entries)
         unless pages.empty?
+          # Truncate header to reasonable length
+          header = header_lines.join(" ")
+          header = header[0..150] if header.length > 150  # Max 150 chars
+
           entries << {
             date: normalized,
             date_str: "Undated",
             pages: pages,
-            header: header_lines.join(" ")  # Join with space instead of comma
+            header: header
           }
         end
       end

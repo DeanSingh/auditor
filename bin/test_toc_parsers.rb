@@ -93,36 +93,31 @@ class TestTheirsTOCParser < Minitest::Test
     assert_equal "Unknown Provider", entries[0][:header]
   end
 
-  def test_stop_at_content_boundary
-    text = "08/15/22\n67-70\nKosak Chiropractic\nCHIEF COMPLAINT: Patient presents with back pain\n"
+  def test_collect_header_text
+    text = "08/15/22\n67-70\nKosak Chiropractic\n"
 
     entries = TheirsTOCParser.parse_text(text)
 
-    # Should stop parsing when it hits "CHIEF COMPLAINT:" (medical content)
+    # Should collect pages and header text
     assert_equal 1, entries.length
     assert_equal "2022-08-15", entries[0][:date]
     assert_equal [67, 68, 69, 70], entries[0][:pages]
-    # Header should NOT include the CHIEF COMPLAINT line
-    refute_includes entries[0][:header], "CHIEF COMPLAINT"
+    assert_includes entries[0][:header], "Kosak Chiropractic"
   end
 
-  def test_multi_line_pages_before_content
+  def test_multi_line_split_ranges
     text = <<~TEXT
       07/07/10
       103-
       105,
       249-251
       Sarbjot
-      Kaur, MD –
-      Kaiser
-      Permanente
-      Kaiser Permanente, Sarbjot Kaur, MD, Office Visit, 07/07/10
-      HISTORY OF PRESENT ILLNESS: Patient is here with wife
+      Kaur, MD
     TEXT
 
     entries = TheirsTOCParser.parse_text(text)
 
-    # Should collect ALL pages before stopping at HISTORY
+    # Should collect ALL pages from split ranges
     assert_equal 1, entries.length
     assert_equal "2010-07-07", entries[0][:date]
     # Must include BOTH ranges: 103-105 AND 249-251
@@ -136,8 +131,21 @@ class TestTheirsTOCParser < Minitest::Test
     # Should include provider name
     assert_includes entries[0][:header], "Sarbjot"
     assert_includes entries[0][:header], "Kaur"
-    # Should NOT include HISTORY line
-    refute_includes entries[0][:header], "HISTORY"
+  end
+
+  def test_long_header_truncation
+    # Create a very long header (over 150 chars)
+    long_text = "After careful consideration of all available information, we are denying all liability for your claim of cumulative trauma injury for the period from 01/02/23 to 08/13/23"
+    text = "09/28/23\n20\n#{long_text}\n"
+
+    entries = TheirsTOCParser.parse_text(text)
+
+    assert_equal 1, entries.length
+    assert_equal "2023-09-28", entries[0][:date]
+    assert_equal [20], entries[0][:pages]
+    # Header should be truncated to 151 chars (0..150)
+    assert entries[0][:header].length <= 151, "Header should be truncated to max 151 chars, got #{entries[0][:header].length}"
+    assert_includes entries[0][:header], "After careful consideration"
   end
 end
 
