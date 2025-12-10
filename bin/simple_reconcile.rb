@@ -259,24 +259,23 @@ class TheirsTOCParser
             next
           end
 
-          # Stop collecting headers at content keywords
-          break if l.match?(/^(HISTORY|SUBJECTIVE|OBJECTIVE|CHIEF|ASSESSMENT|PLAN|DIAGNOSIS|Patient (is|was|presents|complains|participated|reports))/i)
-
           # If line starts with page numbers, collect them
           if l.match?(/^[\d\-,\s]+/)
             page_part = l.match(/^([\d\-,\s]+)/)[1]
             pages_lines << page_part
 
-            # Also grab any text after the pages on same line
+            # Also grab any text after the pages on same line (max 5 header lines)
             text_part = l.sub(/^[\d\-,\s]+/, '').strip
             unless text_part.empty?
-              # Don't add if it's a content keyword
-              break if text_part.match?(/^(HISTORY|SUBJECTIVE|OBJECTIVE|CHIEF|ASSESSMENT|PLAN|DIAGNOSIS|Patient (is|was|presents|complains|participated|reports))/i)
-              header_lines << text_part
+              if header_lines.length < 5
+                header_lines << text_part
+              end
             end
           else
-            # Line is header text (provider name, etc)
-            header_lines << l
+            # Line is header text (provider name, etc) - max 5 header lines
+            if header_lines.length < 5
+              header_lines << l
+            end
           end
 
           idx += 1
@@ -335,25 +334,24 @@ class TheirsTOCParser
             next
           end
 
-          # Stop collecting headers at content keywords
-          break if l.match?(/^(HISTORY|SUBJECTIVE|OBJECTIVE|CHIEF|ASSESSMENT|PLAN|DIAGNOSIS|Patient (is|was|presents|complains|participated|reports))/i)
-
           # Extract page numbers and provider text from line
           if l.match?(/^([\d\-,\s]+)/)
             # Extract pages: "235-240Parveen" -> "235-240"
             page_part = l.match(/^([\d\-,\s]+)/)[1]
             pages_lines << page_part
 
-            # Extract provider text after pages: "235-240Parveen" -> "Parveen"
+            # Extract provider text after pages: "235-240Parveen" -> "Parveen" (max 5 header lines)
             text_part = l.sub(/^[\d\-,\s]+/, '').strip
             unless text_part.empty?
-              # Don't add if it's a content keyword
-              break if text_part.match?(/^(HISTORY|SUBJECTIVE|OBJECTIVE|CHIEF|ASSESSMENT|PLAN|DIAGNOSIS|Patient (is|was|presents|complains|participated|reports))/i)
-              header_lines << text_part
+              if header_lines.length < 5
+                header_lines << text_part
+              end
             end
           else
-            # Line has no page numbers - collect as provider text
-            header_lines << l
+            # Line has no page numbers - collect as provider text (max 5 header lines)
+            if header_lines.length < 5
+              header_lines << l
+            end
           end
 
           idx += 1
