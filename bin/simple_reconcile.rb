@@ -33,112 +33,68 @@ class YoursTOCParser
           year = next_line.match(/^\|\s*\/(\d{2,4})\s*\|/)[1]
           date_str = "#{month}/#{day}/#{year}"
 
-          # Extract header text (3rd column) and page numbers (4th column)
-          header_lines = []
-          page_nums = []
-
-          # Scan until boundary (next date, separator, or EOF)
-          # Start from current line (i) which has MM/DD, continue through /YYYY line
-          idx = i
-          while idx < lines.length
-            l = lines[idx]
-
-            # Stop at TOC entry separator (marks end of current entry)
-            break if l.match?(/^\+[-+]+\+/)
-
-            # Stop at next date pattern (new entry) - but not the current line
-            # Need to skip at least the /YYYY line (i+1)
-            if idx > i + 1
-              # Check for MM/DD pattern (start of new entry)
-              break if l.match?(/^\|\s*\d{1,2}\/\d{1,2}\s*\|/)
-            end
-
-            # Stop at "Unknown" date marker (but not if we're on the current entry)
-            break if idx > i + 1 && (l.match?(/^\|\s*Un\s*\|/) || l.match?(/^\|\s*unknown\s*\|/i))
-
-            # Extract header text from 3rd column
-            if l.match?(/\|\s*[^|]*\|\s*[^|]*\|\s*([^|]+)\|/)
-              text = l.match(/\|\s*[^|]*\|\s*[^|]*\|\s*([^|]+)\|/)[1].strip
-              header_lines << text unless text.empty?
-            end
-
-            # Extract page numbers from last column (supports ranges like "178-191")
-            if l.match?(/\|\s*([\d,\s\-]+)\s*\|?\s*$/)
-              pages_match = l.match(/\|\s*([\d,\s\-]+)\s*\|?\s*$/)
-              # Parse ranges: "178-191" -> [178, 179, ..., 191]
-              pages_match[1].split(',').each do |part|
-                part = part.strip
-                if part.match?(/^(\d+)-(\d+)$/)
-                  range_match = part.match(/^(\d+)-(\d+)$/)
-                  (range_match[1].to_i..range_match[2].to_i).each { |p| page_nums << p }
-                elsif part.match?(/^\d+$/)
-                  page_nums << part.to_i
-                end
-              end
-            end
-
-            idx += 1
-          end
+          # Extract header and pages (MM/DD + /YYYY = skip 1 line)
+          data = extract_entry_data(lines, i, 1)
 
           normalized_date = normalize_date(date_str)
-          header = header_lines.first(3).join(" ").strip
+          # Use first(1) to avoid duplicate text from table cells
+          header = data[:header_lines].first(1).join(" ").strip
+          header = truncate_header(header)
 
           entries << {
             date: normalized_date,
             date_str: date_str,
-            pages: page_nums.uniq.sort,
+            pages: data[:page_nums].uniq.sort,
             header: header
           }
         end
+      # Pattern: Split date - MM/ on line 1, DD on line 2, /YYYY on line 3
+      elsif line.match?(/^\|\s*(\d{1,2})\/\s*\|/)
+        match = line.match(/^\|\s*(\d{1,2})\/\s*\|/)
+        month = match[1]
+
+        # Get day from next line
+        next_line = i + 1 < lines.length ? lines[i + 1] : ""
+        if next_line.match?(/^\|\s*(\d{1,2})\s*\|/)
+          day = next_line.match(/^\|\s*(\d{1,2})\s*\|/)[1]
+
+          # Get year from line after that
+          year_line = i + 2 < lines.length ? lines[i + 2] : ""
+          if year_line.match?(/^\|\s*\/(\d{2,4})\s*\|/)
+            year = year_line.match(/^\|\s*\/(\d{2,4})\s*\|/)[1]
+            date_str = "#{month}/#{day}/#{year}"
+
+            # Extract header and pages (MM/ + DD + /YYYY = skip 2 lines)
+            data = extract_entry_data(lines, i, 2)
+
+            normalized_date = normalize_date(date_str)
+            # Use first(1) to avoid duplicate text from table cells
+            header = data[:header_lines].first(1).join(" ").strip
+            header = truncate_header(header)
+
+            entries << {
+              date: normalized_date,
+              date_str: date_str,
+              pages: data[:page_nums].uniq.sort,
+              header: header
+            }
+          end
+        end
       # Pattern: Unknown date entries
       elsif line.match?(/^\|\s*Un\s*\|/) || line.match?(/^\|\s*unknown\s*\|/i)
-        # Scan until boundary to extract pages and headers
-        header_lines = []
-        page_nums = []
+        # Extract header and pages (Unknown = skip 0 lines)
+        data = extract_entry_data(lines, i, 0)
 
-        idx = i
-        while idx < lines.length
-          l = lines[idx]
+        unless data[:page_nums].empty?
+          # Use first(1) to avoid duplicate text from table cells
+          header = data[:header_lines].first(1).join(" ").strip
+          header = truncate_header(header)
 
-          # Stop at TOC entry separator
-          break if l.match?(/^\+[-+]+\+/)
-
-          # Stop at next date pattern (new entry)
-          break if idx > i && (l.match?(/^\|\s*\d{1,2}\/\d{1,2}\s*\|/) || l.match?(/^\|\s*\/\d{2,4}\s*\|/))
-
-          # Stop at another "Unknown" marker
-          break if idx > i && (l.match?(/^\|\s*Un\s*\|/) || l.match?(/^\|\s*unknown\s*\|/i))
-
-          # Extract header text from 3rd column
-          if l.match?(/\|\s*[^|]*\|\s*[^|]*\|\s*([^|]+)\|/)
-            text = l.match(/\|\s*[^|]*\|\s*[^|]*\|\s*([^|]+)\|/)[1].strip
-            header_lines << text unless text.empty?
-          end
-
-          # Extract page numbers from last column (supports ranges like "178-191")
-          if l.match?(/\|\s*([\d,\s\-]+)\s*\|?\s*$/)
-            pages_match = l.match(/\|\s*([\d,\s\-]+)\s*\|?\s*$/)
-            # Parse ranges: "178-191" -> [178, 179, ..., 191]
-            pages_match[1].split(',').each do |part|
-              part = part.strip
-              if part.match?(/^(\d+)-(\d+)$/)
-                range_match = part.match(/^(\d+)-(\d+)$/)
-                (range_match[1].to_i..range_match[2].to_i).each { |p| page_nums << p }
-              elsif part.match?(/^\d+$/)
-                page_nums << part.to_i
-              end
-            end
-          end
-
-          idx += 1
-        end
-
-        unless page_nums.empty?
           entries << {
             date: "UNKNOWN",
             date_str: "Unknown",
-            pages: page_nums.uniq.sort,
-            header: header_lines.first(3).join(" ").strip
+            pages: data[:page_nums].uniq.sort,
+            header: header
           }
         end
       end
@@ -150,6 +106,60 @@ class YoursTOCParser
   end
 
   private
+
+  def self.truncate_header(text, max_length = 150)
+    return text if text.length <= max_length
+    truncated = text[0...max_length]
+    last_space = truncated.rindex(' ')
+    last_space ? text[0...last_space] : truncated
+  end
+
+  def self.extract_entry_data(lines, start_idx, skip_lines)
+    header_lines = []
+    page_nums = []
+
+    idx = start_idx
+    while idx < lines.length
+      l = lines[idx]
+
+      # Stop at TOC entry separator
+      break if l.match?(/^\+[-+]+\+/)
+
+      # Stop at next date pattern (new entry) - but not current date block
+      if idx > start_idx + skip_lines
+        # Check for MM/DD pattern or MM/ pattern (start of new entry)
+        break if l.match?(/^\|\s*\d{1,2}\//)
+      end
+
+      # Stop at "Unknown" date marker
+      break if idx > start_idx + skip_lines && (l.match?(/^\|\s*Un\s*\|/) || l.match?(/^\|\s*unknown\s*\|/i))
+
+      # Extract header text from 3rd column
+      if l.match?(/\|\s*[^|]*\|\s*[^|]*\|\s*([^|]+)\|/)
+        text = l.match(/\|\s*[^|]*\|\s*[^|]*\|\s*([^|]+)\|/)[1].strip
+        header_lines << text unless text.empty?
+      end
+
+      # Extract page numbers from last column (supports ranges like "178-191")
+      if l.match?(/\|\s*([\d,\s\-]+)\s*\|?\s*$/)
+        pages_match = l.match(/\|\s*([\d,\s\-]+)\s*\|?\s*$/)
+        # Parse ranges: "178-191" -> [178, 179, ..., 191]
+        pages_match[1].split(',').each do |part|
+          part = part.strip
+          if part.match?(/^(\d+)-(\d+)$/)
+            range_match = part.match(/^(\d+)-(\d+)$/)
+            (range_match[1].to_i..range_match[2].to_i).each { |p| page_nums << p }
+          elsif part.match?(/^\d+$/)
+            page_nums << part.to_i
+          end
+        end
+      end
+
+      idx += 1
+    end
+
+    { header_lines: header_lines, page_nums: page_nums }
+  end
 
   def self.extract_text(file_path, case_dir: nil)
     ext = File.extname(file_path).downcase
@@ -240,6 +250,18 @@ class TheirsTOCParser
             next
           end
 
+          # Skip lines that look like dates (contain slashes with digits)
+          # This prevents "01/02/23 to 08/13/23" from being parsed as page "01"
+          if l.match?(/\d+\/\d+/)
+            # This is a date in content, not page numbers - treat as header
+            header_lines << l
+            idx += 1
+            next
+          end
+
+          # Stop collecting headers at content keywords
+          break if l.match?(/^(HISTORY|SUBJECTIVE|OBJECTIVE|CHIEF|ASSESSMENT|PLAN|DIAGNOSIS|Patient (is|was|presents|complains|participated|reports))/i)
+
           # If line starts with page numbers, collect them
           if l.match?(/^[\d\-,\s]+/)
             page_part = l.match(/^([\d\-,\s]+)/)[1]
@@ -247,7 +269,11 @@ class TheirsTOCParser
 
             # Also grab any text after the pages on same line
             text_part = l.sub(/^[\d\-,\s]+/, '').strip
-            header_lines << text_part unless text_part.empty?
+            unless text_part.empty?
+              # Don't add if it's a content keyword
+              break if text_part.match?(/^(HISTORY|SUBJECTIVE|OBJECTIVE|CHIEF|ASSESSMENT|PLAN|DIAGNOSIS|Patient (is|was|presents|complains|participated|reports))/i)
+              header_lines << text_part
+            end
           else
             # Line is header text (provider name, etc)
             header_lines << l
@@ -267,7 +293,7 @@ class TheirsTOCParser
         unless pages.empty?
           # Truncate header to reasonable length
           header = header_lines.join(" ")
-          header = header[0..150] if header.length > 150  # Max 150 chars
+          header = truncate_header(header)
 
           entries << {
             date: normalized,
@@ -300,6 +326,18 @@ class TheirsTOCParser
             next
           end
 
+          # Skip lines that look like dates (contain slashes with digits)
+          # This prevents "01/02/23 to 08/13/23" from being parsed as page "01"
+          if l.match?(/\d+\/\d+/)
+            # This is a date in content, not page numbers - treat as header
+            header_lines << l
+            idx += 1
+            next
+          end
+
+          # Stop collecting headers at content keywords
+          break if l.match?(/^(HISTORY|SUBJECTIVE|OBJECTIVE|CHIEF|ASSESSMENT|PLAN|DIAGNOSIS|Patient (is|was|presents|complains|participated|reports))/i)
+
           # Extract page numbers and provider text from line
           if l.match?(/^([\d\-,\s]+)/)
             # Extract pages: "235-240Parveen" -> "235-240"
@@ -309,6 +347,8 @@ class TheirsTOCParser
             # Extract provider text after pages: "235-240Parveen" -> "Parveen"
             text_part = l.sub(/^[\d\-,\s]+/, '').strip
             unless text_part.empty?
+              # Don't add if it's a content keyword
+              break if text_part.match?(/^(HISTORY|SUBJECTIVE|OBJECTIVE|CHIEF|ASSESSMENT|PLAN|DIAGNOSIS|Patient (is|was|presents|complains|participated|reports))/i)
               header_lines << text_part
             end
           else
@@ -330,7 +370,7 @@ class TheirsTOCParser
         unless pages.empty?
           # Truncate header to reasonable length
           header = header_lines.join(" ")
-          header = header[0..150] if header.length > 150  # Max 150 chars
+          header = truncate_header(header)
 
           entries << {
             date: normalized,
@@ -348,6 +388,13 @@ class TheirsTOCParser
   end
 
   private
+
+  def self.truncate_header(text, max_length = 150)
+    return text if text.length <= max_length
+    truncated = text[0...max_length]
+    last_space = truncated.rindex(' ')
+    last_space ? text[0...last_space] : truncated
+  end
 
   def self.parse_page_numbers(pages_str)
     pages = []

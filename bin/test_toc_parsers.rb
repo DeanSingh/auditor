@@ -147,6 +147,16 @@ class TestTheirsTOCParser < Minitest::Test
     assert entries[0][:header].length <= 151, "Header should be truncated to max 151 chars, got #{entries[0][:header].length}"
     assert_includes entries[0][:header], "After careful consideration"
   end
+
+  def test_date_in_content_not_parsed_as_page
+    text = "09/28/23\n20-22\nDenial for period 01/02/23 to 08/13/23\n"
+
+    entries = TheirsTOCParser.parse_text(text)
+
+    assert_equal 1, entries.length
+    assert_equal [20, 21, 22], entries[0][:pages]  # NOT [1, 20, 21, 22]
+    refute_includes entries[0][:pages], 1, "Should not parse '01' from date as a page number"
+  end
 end
 
 class TestYoursTOCParser < Minitest::Test
@@ -206,6 +216,28 @@ class TestYoursTOCParser < Minitest::Test
 
     assert_equal "2024-01-04", entries[1][:date]
     assert_equal [192, 193, 194], entries[1][:pages]
+  end
+
+  def test_split_date_across_lines
+    # Known issue: dates split across lines (08- on one line, 11 on next)
+    # This test documents the current behavior
+    content = <<~TABLE
+      | 08/   |          |                    |         |
+      | 11    |          |                    |         |
+      | /2022 |          |                    |         |
+      |       |          | Kosak Chiropractic |         |
+      |       |          |                    | 67, 68  |
+      +-------+----------+--------------------+---------+
+    TABLE
+
+    entries = YoursTOCParser.parse_text(content)
+
+    # This test will fail if the split date bug exists
+    # Expected: 1 entry with date "2022-08-11"
+    # Current behavior: likely 0 entries (date pattern doesn't match)
+    assert_equal 1, entries.length, "Should parse split date across lines"
+    assert_equal "2022-08-11", entries[0][:date]
+    assert_equal [67, 68], entries[0][:pages]
   end
 end
 
