@@ -5,6 +5,12 @@ require 'date'
 require 'json'
 require 'set'
 
+begin
+  require 'docx'
+rescue LoadError
+  # docx gem not available - will fall back to pandoc
+end
+
 # Shared utilities for TOC parsing
 module TOCParserUtils
   def truncate_header(text, max_length = 150)
@@ -68,8 +74,84 @@ class YoursTOCParser
   FULL_MONTH_PATTERN = /^\|\s*(#{MONTH_NAMES})\s+(\d{1,2}),\s+(\d{4})\s*\|/i.freeze
 
   def self.parse(file_path, case_dir: nil)
-    content = extract_text(file_path, case_dir: case_dir)
-    parse_text(content)
+    ext = File.extname(file_path).downcase
+
+    case ext
+    when '.docx'
+      # Try docx gem first (eliminates pandoc line-break issues)
+      if defined?(Docx)
+        parse_docx(file_path)
+      else
+        # Fall back to pandoc + text parsing
+        content = extract_text(file_path, case_dir: case_dir)
+        parse_text(content)
+      end
+    when '.txt'
+      # Text parsing for .txt files and tests
+      content = File.read(file_path, encoding: 'UTF-8', invalid: :replace, undef: :replace)
+      parse_text(content)
+    else
+      # Try extracting text for unknown formats
+      content = extract_text(file_path, case_dir: case_dir)
+      parse_text(content)
+    end
+  end
+
+  def self.parse_docx(file_path)
+    entries = []
+    doc = Docx::Document.open(file_path)
+
+    doc.tables.each do |table|
+      table.rows.each do |row|
+        cells = row.cells.map { |c| c.text.strip }
+
+        # Skip header row
+        next if cells[0]&.downcase&.match?(/date.*service/)
+
+        # Extract: Date | Provider | Excerpt | Pages
+        date_str = cells[0]
+        provider = cells[1]
+        excerpt = cells[2]
+        pages_str = cells[3]
+
+        next if date_str.nil? || date_str.empty?
+
+        # Normalize date
+        date = parse_date_cell(date_str)
+
+        # Parse pages
+        pages = pages_str ? parse_page_numbers(pages_str) : []
+
+        next if pages.empty?
+
+        entries << {
+          date: date,
+          date_str: date_str,
+          pages: pages,
+          header: truncate_header(excerpt || provider || "")
+        }
+      end
+    end
+
+    entries
+  end
+
+  def self.parse_date_cell(text)
+    return "UNKNOWN" if text.match?(/unknown|undated/i)
+
+    # Try MM/DD/YYYY or MM/DD/YY
+    if (m = text.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/))
+      normalize_date("#{m[1]}/#{m[2]}/#{m[3]}")
+    # Try YYYY-MM-DD
+    elsif (m = text.match(/(\d{4})-(\d{2})-(\d{2})/))
+      "#{m[1]}-#{m[2]}-#{m[3]}"
+    # Try written month: September 28, 2023
+    elsif (m = text.match(/(#{MONTH_NAMES})\s+(\d{1,2}),?\s+(\d{4})/i))
+      month = MONTH_MAP[m[1].downcase]
+      normalize_date("#{month}/#{m[2]}/#{m[3]}")
+    else
+      "UNKNOWN"
+    end
   end
 
   def self.parse_text(content)
