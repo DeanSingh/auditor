@@ -542,6 +542,20 @@ class DiscrepancyReporter
     # Post-process: merge YOURS ONLY + THEIRS ONLY into DATE MISMATCH where pages overlap
     final_rows = merge_date_mismatches(all_rows)
 
+    # Sort by first page number only
+    final_rows.sort_by! do |row|
+      your_pages_str = row[3]
+      their_pages_str = row[4]
+
+      if your_pages_str.is_a?(String) && your_pages_str != "—" && your_pages_str != ""
+        your_pages_str.split(",").map(&:strip).map(&:to_i).min
+      elsif their_pages_str.is_a?(String) && their_pages_str != "—" && their_pages_str != ""
+        their_pages_str.split(",").map(&:strip).map(&:to_i).min
+      else
+        999999
+      end
+    end
+
     # Write to CSV
     CSV.open(output_path, "wb") do |csv|
       csv << ["Status", "Your Date", "Their Date", "Your Pages", "Their Match Pages", "Match Confidence", "Your Header", "Their Header", "Action"]
