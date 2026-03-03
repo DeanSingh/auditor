@@ -3,8 +3,7 @@
 
 require 'json'
 require 'optparse'
-require_relative '../lib/config'
-require_relative '../lib/workflow_client'
+require_relative '../lib/cli_helpers'
 
 # Inspects a workflow run via the GraphQL API.
 #
@@ -18,18 +17,17 @@ require_relative '../lib/workflow_client'
 #   - Execution outputs may contain PHI — this tool outputs to stdout only (no files written)
 #   - Error messages are truncated to avoid leaking PHI
 class RunInspector
-  MAX_ERROR_LENGTH = 100
-
-  def initialize(run_id, step_name: nil, iteration: nil, iterations: nil, base_url: nil, org_name: nil)
+  def initialize(run_id, step_name: nil, iteration: nil, iteration_min: nil, iteration_max: nil, base_url: nil, org_name: nil)
     @run_id = run_id
     @step_name = step_name
     @iteration = iteration
-    @iterations = iterations
+    @iteration_min = iteration_min
+    @iteration_max = iteration_max
 
     config = AuditorConfig.new
     base = base_url || config.base_url
 
-    org_id = resolve_org(base, config.token!, org_name) if org_name
+    org_id = CLIHelpers.resolve_org_id(base_url: base, token: config.token!, name: org_name) if org_name
 
     @client = WorkflowClient.new(
       base_url: base,
@@ -105,22 +103,12 @@ class RunInspector
   end
 
   def drill_down
-    iter = @iteration
-    iter_min = nil
-    iter_max = nil
-
-    if @iterations
-      parts = @iterations.split('-', 2)
-      iter_min = parts[0].to_i
-      iter_max = parts[1].to_i
-    end
-
     data = @client.fetch_run_executions(
       @run_id,
       step_name: @step_name,
-      iteration: iter,
-      iteration_min: iter_min,
-      iteration_max: iter_max
+      iteration: @iteration,
+      iteration_min: @iteration_min,
+      iteration_max: @iteration_max
     )
 
     if data.nil?
@@ -148,27 +136,13 @@ class RunInspector
     puts JSON.pretty_generate(output)
   end
 
-  def resolve_org(base_url, token, name)
-    client = WorkflowClient.new(base_url: base_url, token: token, org_id: nil)
-    orgs = client.fetch_organizations
-    match = orgs.find { |o| o['name'].downcase == name.downcase }
-
-    if match.nil?
-      available = orgs.map { |o| o['name'] }.join(', ')
-      warn "Error: Organization \"#{name}\" not found"
-      warn "Available: #{available}"
-      exit 1
-    end
-
-    match['id']
-  end
 end
 
 # Main execution
 if __FILE__ == $0
   step_name = nil
   iteration = nil
-  iterations = nil
+  iterations_raw = nil
   base_url = nil
   org_name = nil
 
@@ -189,7 +163,7 @@ if __FILE__ == $0
     end
 
     opts.on('--iterations RANGE', 'Iteration range to fetch (e.g., "99-123")') do |range|
-      iterations = range
+      iterations_raw = range
     end
 
     opts.on('--org NAME', 'Organization name') do |name|
@@ -219,6 +193,29 @@ if __FILE__ == $0
 
   parser.parse!
 
+  if iteration && iterations_raw
+    warn 'Error: --iteration and --iterations are mutually exclusive'
+    exit 1
+  end
+
+  if iterations_raw && !iterations_raw.match?(/\A\d+-\d+\z/)
+    warn 'Error: --iterations must be in format N-M (e.g., "99-123")'
+    exit 1
+  end
+
+  # Parse iterations range into integers once
+  iteration_min = nil
+  iteration_max = nil
+  if iterations_raw
+    parts = iterations_raw.split('-', 2)
+    iteration_min = parts[0].to_i
+    iteration_max = parts[1].to_i
+    if iteration_min > iteration_max
+      warn "Error: --iterations min (#{parts[0]}) must be <= max (#{parts[1]})"
+      exit 1
+    end
+  end
+
   if ARGV.empty?
     warn 'Error: run_id is required'
     warn
@@ -228,43 +225,18 @@ if __FILE__ == $0
     exit 1
   end
 
-  arg = ARGV.first
-  run_id = if arg =~ %r{/runs/(\d+)}
-             $1
-           elsif arg =~ /\A\d+\z/
-             arg
-           else
-             warn "Error: Could not parse run ID from: #{arg}"
-             warn 'Expected a number (e.g., 8564) or a URL (e.g., https://workflow.ing/dashboard/runs/8564)'
-             exit 1
-           end
+  run_id = CLIHelpers.parse_resource_id(ARGV.first, path_segment: 'runs')
 
-  begin
+  CLIHelpers.run_with_error_handling do
     inspector = RunInspector.new(
       run_id,
       step_name: step_name,
       iteration: iteration,
-      iterations: iterations,
+      iteration_min: iteration_min,
+      iteration_max: iteration_max,
       base_url: base_url,
       org_name: org_name
     )
     inspector.run
-  rescue AuditorConfig::MissingConfigError => e
-    warn e.message
-    exit 1
-  rescue WorkflowClient::GraphQLError => e
-    warn "Error: GraphQL query failed — #{e.message}"
-    exit 1
-  rescue WorkflowClient::HTTPError => e
-    warn "Error: HTTP request failed — #{e.message}"
-    exit 1
-  rescue WorkflowClient::InsecureConnectionError => e
-    warn "Error: #{e.message}"
-    exit 1
-  rescue StandardError => e
-    msg = "#{e.class}: #{e.message}"
-    msg = "#{msg[0...100]}..." if msg.length > 100
-    warn "Unexpected error: #{msg}"
-    exit 1
   end
 end

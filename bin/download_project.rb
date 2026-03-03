@@ -3,8 +3,7 @@
 
 require 'fileutils'
 require 'time'
-require_relative '../lib/config'
-require_relative '../lib/workflow_client'
+require_relative '../lib/cli_helpers'
 
 # Downloads project files from Workflow Labs and sets up a local case directory.
 #
@@ -20,7 +19,6 @@ require_relative '../lib/workflow_client'
 class ProjectDownloader
   AUDIT_LOG_DIR = File.expand_path('~/.config/auditor')
   AUDIT_LOG_PATH = File.join(AUDIT_LOG_DIR, 'access.log')
-  MAX_ERROR_LENGTH = 100
 
   def initialize(project_id, case_name: nil, base_url: nil, org_name: nil)
     @project_id = project_id
@@ -29,7 +27,7 @@ class ProjectDownloader
     @base_url = base_url || @config.base_url
 
     # Resolve org by name if provided
-    org_id = resolve_org(org_name) if org_name
+    org_id = CLIHelpers.resolve_org_id(base_url: @base_url, token: @config.token!, name: org_name) if org_name
 
     @client = WorkflowClient.new(
       base_url: @base_url,
@@ -131,22 +129,6 @@ class ProjectDownloader
 
   private
 
-  # Looks up an organization by name and returns its ID.
-  def resolve_org(name)
-    client = WorkflowClient.new(base_url: @base_url, token: @config.token!, org_id: nil)
-    orgs = client.fetch_organizations
-    match = orgs.find { |o| o['name'].downcase == name.downcase }
-
-    if match.nil?
-      available = orgs.map { |o| o['name'] }.join(', ')
-      warn "Error: Organization \"#{name}\" not found"
-      warn "Available: #{available}"
-      exit 1
-    end
-
-    match['id']
-  end
-
   # Derives a case name from the project name: "Eric Reed" -> "Reed_Eric"
   def derive_case_name(project)
     name = project['name']&.strip
@@ -200,7 +182,7 @@ class ProjectDownloader
       end
       puts "✗"
       # Truncate error to avoid PHI leaks
-      msg = e.message[0...MAX_ERROR_LENGTH]
+      msg = e.message[0...CLIHelpers::MAX_ERROR_LENGTH]
       warn "      Error: #{msg}"
       false
     end
@@ -352,37 +334,10 @@ if __FILE__ == $0
     exit 1
   end
 
-  arg = ARGV.first
-  project_id = if arg =~ %r{/projects/(\d+)}
-                 $1
-               elsif arg =~ /\A\d+\z/
-                 arg
-               else
-                 warn "Error: Could not parse project ID from: #{arg}"
-                 warn "Expected a number (e.g., 50) or a URL (e.g., https://workflow.ing/dashboard/projects/50)"
-                 exit 1
-               end
+  project_id = CLIHelpers.parse_resource_id(ARGV.first, path_segment: 'projects')
 
-  begin
+  CLIHelpers.run_with_error_handling do
     downloader = ProjectDownloader.new(project_id, case_name: case_name, base_url: base_url, org_name: org_name)
     downloader.run
-  rescue AuditorConfig::MissingConfigError => e
-    warn e.message
-    exit 1
-  rescue WorkflowClient::GraphQLError => e
-    warn "Error: GraphQL query failed — #{e.message}"
-    exit 1
-  rescue WorkflowClient::HTTPError => e
-    warn "Error: HTTP request failed — #{e.message}"
-    exit 1
-  rescue WorkflowClient::InsecureConnectionError => e
-    warn "Error: #{e.message}"
-    exit 1
-  rescue StandardError => e
-    # Truncate to avoid PHI leaks in unexpected errors
-    msg = "#{e.class}: #{e.message}"
-    msg = "#{msg[0...100]}..." if msg.length > 100
-    warn "Unexpected error: #{msg}"
-    exit 1
   end
 end

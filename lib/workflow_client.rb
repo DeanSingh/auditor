@@ -21,7 +21,7 @@ class WorkflowClient
     query { organizations { id name current } }
   GRAPHQL
 
-  GRAPHQL_QUERY = <<~GRAPHQL
+  PROJECT_QUERY = <<~GRAPHQL
     query GetProject($id: ID!) {
       project(id: $id) {
         id
@@ -104,13 +104,14 @@ class WorkflowClient
     @base_url = base_url.chomp('/')
     @token = token
     @org_id = org_id
+    @graphql_uri = URI("#{@base_url}/graphql")
 
     validate_url_security!(@base_url)
   end
 
   # Fetches the user's organizations.
   def fetch_organizations
-    uri = URI("#{@base_url}/graphql")
+    uri = @graphql_uri
     body = JSON.generate(query: ORGS_QUERY)
     response = post_json(uri, body)
     data = parse_response(response)
@@ -120,10 +121,10 @@ class WorkflowClient
   # Fetches a project by ID via the GraphQL API.
   # Returns the project hash from the response data.
   def fetch_project(project_id)
-    uri = URI("#{@base_url}/graphql")
+    uri = @graphql_uri
 
     body = JSON.generate(
-      query: GRAPHQL_QUERY,
+      query: PROJECT_QUERY,
       variables: { id: project_id }
     )
 
@@ -136,7 +137,7 @@ class WorkflowClient
   # Fetches a run summary (workflow structure + lightweight execution list).
   # Returns the run hash with workflow, steps, stats, and execution ids/statuses.
   def fetch_run_summary(run_id)
-    uri = URI("#{@base_url}/graphql")
+    uri = @graphql_uri
     body = JSON.generate(query: RUN_SUMMARY_QUERY, variables: { id: run_id })
     response = post_json(uri, body)
     data = parse_response(response)
@@ -146,7 +147,7 @@ class WorkflowClient
   # Fetches execution details for a specific step and iteration range.
   # Returns the run hash with filtered executions including full output/result.
   def fetch_run_executions(run_id, step_name:, iteration: nil, iteration_min: nil, iteration_max: nil)
-    uri = URI("#{@base_url}/graphql")
+    uri = @graphql_uri
 
     filter = { stepName: step_name }
     filter[:iteration] = iteration if iteration

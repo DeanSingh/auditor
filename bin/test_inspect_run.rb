@@ -130,7 +130,53 @@ class TestInspectRun < Minitest::Test
   end
 
   # -------------------------------------------------------------------
-  # Test 4: Exits with error for invalid input
+  # Test 4: Drill-down with iteration range
+  # -------------------------------------------------------------------
+  def test_drill_down_with_iteration_range
+    mount_response({
+      'data' => {
+        'run' => {
+          'executions' => [
+            { 'iteration' => 10, 'status' => 'SUCCEEDED',
+              'output' => 'a', 'result' => nil, 'prompt' => nil,
+              'step' => { 'name' => 'Extract Info' }, 'started' => nil, 'finished' => nil },
+            { 'iteration' => 11, 'status' => 'SUCCEEDED',
+              'output' => 'b', 'result' => nil, 'prompt' => nil,
+              'step' => { 'name' => 'Extract Info' }, 'started' => nil, 'finished' => nil }
+          ]
+        }
+      }
+    })
+
+    out, status = run_script('200', '--step', 'Extract Info', '--iterations', '10-11', '--base-url', @base_url)
+    assert status.success?, "Script failed: #{out}"
+
+    result = JSON.parse(out)
+    assert_equal 2, result['executions'].length
+    assert_equal 10, result['executions'][0]['iteration']
+    assert_equal 11, result['executions'][1]['iteration']
+  end
+
+  # -------------------------------------------------------------------
+  # Test 5: Rejects combining --iteration and --iterations
+  # -------------------------------------------------------------------
+  def test_rejects_iteration_and_iterations_together
+    out, status = run_script('200', '--step', 'Extract Info', '--iteration', '5', '--iterations', '10-20', '--base-url', @base_url)
+    refute status.success?
+    assert_includes out, 'mutually exclusive'
+  end
+
+  # -------------------------------------------------------------------
+  # Test 6: Rejects invalid --iterations format
+  # -------------------------------------------------------------------
+  def test_rejects_invalid_iterations_format
+    out, status = run_script('200', '--step', 'Extract Info', '--iterations', 'abc', '--base-url', @base_url)
+    refute status.success?
+    assert_includes out, 'format N-M'
+  end
+
+  # -------------------------------------------------------------------
+  # Test 7: Exits with error for invalid input
   # -------------------------------------------------------------------
   def test_exits_with_error_for_invalid_input
     out, status = run_script('not-a-number', '--base-url', @base_url)
@@ -139,7 +185,7 @@ class TestInspectRun < Minitest::Test
   end
 
   # -------------------------------------------------------------------
-  # Test 5: Exits with error when no arguments given
+  # Test 8: Exits with error when no arguments given
   # -------------------------------------------------------------------
   def test_exits_with_error_when_no_args
     out, status = run_script('--base-url', @base_url)
