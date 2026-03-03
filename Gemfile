@@ -5,3 +5,8 @@ source 'https://rubygems.org'
 ruby '>= 3.0.0'
 
 gem 'docx'
+
+group :test do
+  gem 'minitest'
+  gem 'webrick'
+end
