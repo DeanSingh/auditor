@@ -288,6 +288,53 @@ class TestWorkflowClient < Minitest::Test
     assert_equal 'Not found', error.message
   end
 
+  # -------------------------------------------------------------------
+  # Test 13: Fetches run summary data
+  # -------------------------------------------------------------------
+  def test_fetches_run_summary
+    run_data = {
+      'data' => {
+        'run' => {
+          'id' => '100',
+          'status' => 'SUCCEEDED',
+          'started' => '2026-03-01T10:00:00Z',
+          'finished' => '2026-03-01T11:00:00Z',
+          'stats' => {
+            'executionCount' => 50,
+            'stepCount' => 5,
+            'failedExecutionCount' => 0,
+            'succeededExecutionCount' => 50
+          },
+          'workflow' => {
+            'name' => 'Record Review',
+            'steps' => [
+              { 'id' => '1', 'name' => 'Extract Info', 'kind' => 'PROMPT', 'priority' => 1,
+                'action' => { '__typename' => 'Action__Prompt', 'messages' => [{ 'role' => 'USER', 'template' => 'Extract date from {{page}}' }] } },
+              { 'id' => '2', 'name' => 'File Loop', 'kind' => 'ITERATOR', 'priority' => 2,
+                'action' => { '__typename' => 'Action__Iterator' } }
+            ]
+          },
+          'executions' => [
+            { 'id' => '1', 'status' => 'SUCCEEDED', 'step' => { 'name' => 'Extract Info' } },
+            { 'id' => '2', 'status' => 'SUCCEEDED', 'step' => { 'name' => 'Extract Info' } },
+            { 'id' => '3', 'status' => 'SUCCEEDED', 'step' => { 'name' => 'File Loop' } }
+          ]
+        }
+      }
+    }
+
+    mount_graphql_response(run_data)
+
+    client = WorkflowClient.new(base_url: @base_url, token: 'tok', org_id: 'org')
+    result = client.fetch_run_summary('100')
+
+    assert_equal '100', result['id']
+    assert_equal 'SUCCEEDED', result['status']
+    assert_equal 'Record Review', result['workflow']['name']
+    assert_equal 2, result['workflow']['steps'].length
+    assert_equal 3, result['executions'].length
+  end
+
   private
 
   def mount_graphql_response(response_hash)

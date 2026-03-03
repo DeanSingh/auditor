@@ -47,6 +47,59 @@ class WorkflowClient
     }
   GRAPHQL
 
+  RUN_SUMMARY_QUERY = <<~GRAPHQL
+    query InspectRun($id: ID!) {
+      run(id: $id) {
+        id
+        status
+        started
+        finished
+        stats {
+          executionCount
+          stepCount
+          failedExecutionCount
+          succeededExecutionCount
+        }
+        workflow {
+          name
+          steps {
+            id
+            name
+            kind
+            priority
+            action {
+              ... on Action__Prompt {
+                messages { role template }
+              }
+            }
+          }
+        }
+        executions {
+          id
+          status
+          step { name }
+        }
+      }
+    }
+  GRAPHQL
+
+  RUN_EXECUTIONS_QUERY = <<~GRAPHQL
+    query InspectRunExecutions($id: ID!, $filter: ExecutionFilterInput) {
+      run(id: $id) {
+        executions(filter: $filter) {
+          iteration
+          status
+          output
+          result
+          prompt
+          step { name }
+          started
+          finished
+        }
+      }
+    }
+  GRAPHQL
+
   def initialize(base_url:, token:, org_id:)
     @base_url = base_url.chomp('/')
     @token = token
@@ -78,6 +131,36 @@ class WorkflowClient
     data = parse_response(response)
 
     data['project']
+  end
+
+  # Fetches a run summary (workflow structure + lightweight execution list).
+  # Returns the run hash with workflow, steps, stats, and execution ids/statuses.
+  def fetch_run_summary(run_id)
+    uri = URI("#{@base_url}/graphql")
+    body = JSON.generate(query: RUN_SUMMARY_QUERY, variables: { id: run_id })
+    response = post_json(uri, body)
+    data = parse_response(response)
+    data['run']
+  end
+
+  # Fetches execution details for a specific step and iteration range.
+  # Returns the run hash with filtered executions including full output/result.
+  def fetch_run_executions(run_id, step_name:, iteration: nil, iteration_min: nil, iteration_max: nil)
+    uri = URI("#{@base_url}/graphql")
+
+    filter = { stepName: step_name }
+    filter[:iteration] = iteration if iteration
+    filter[:iterationMin] = iteration_min if iteration_min
+    filter[:iterationMax] = iteration_max if iteration_max
+
+    body = JSON.generate(
+      query: RUN_EXECUTIONS_QUERY,
+      variables: { id: run_id, filter: filter }
+    )
+
+    response = post_json(uri, body)
+    data = parse_response(response)
+    data['run']
   end
 
   # Downloads a file from the given URL, following redirects.
