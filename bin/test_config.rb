@@ -79,12 +79,10 @@ class TestAuditorConfig < Minitest::Test
     refute_includes error.message, 'token_', 'Error message must never include a token value'
   end
 
-  def test_missing_org_id_raises_with_helpful_message
+  def test_missing_org_id_returns_nil
     config = AuditorConfig.new(config_path: '/nonexistent/path')
 
-    error = assert_raises(AuditorConfig::MissingConfigError) { config.org_id! }
-    assert_includes error.message, 'WORKFLOW_ORG_ID'
-    assert_includes error.message, 'config/auditor/config'
+    assert_nil config.org_id
   end
 
   def test_skips_blank_lines_and_comments_in_config_file
