@@ -335,6 +335,72 @@ class TestWorkflowClient < Minitest::Test
     assert_equal 3, result['executions'].length
   end
 
+  # -------------------------------------------------------------------
+  # Test 14: Fetches filtered run executions with correct filter variables
+  # -------------------------------------------------------------------
+  def test_fetches_run_executions_with_filter
+    run_data = {
+      'data' => {
+        'run' => {
+          'executions' => [
+            { 'iteration' => 5, 'status' => 'SUCCEEDED', 'output' => 'Date: 2024-12-11',
+              'result' => { 'date' => '2024-12-11' }, 'prompt' => 'Extract date...',
+              'step' => { 'name' => 'Extract Info' }, 'started' => '2026-03-01T10:00:00Z',
+              'finished' => '2026-03-01T10:00:05Z' }
+          ]
+        }
+      }
+    }
+
+    mount_graphql_response(run_data)
+
+    client = WorkflowClient.new(base_url: @base_url, token: 'tok', org_id: 'org')
+    result = client.fetch_run_executions('100', step_name: 'Extract Info', iteration: 5)
+
+    assert_equal 1, result['executions'].length
+    exec = result['executions'].first
+    assert_equal 5, exec['iteration']
+    assert_equal 'Date: 2024-12-11', exec['output']
+
+    # Verify the filter was sent in the request body
+    parsed = JSON.parse(@received_body)
+    assert_equal 'Extract Info', parsed['variables']['filter']['stepName']
+    assert_equal 5, parsed['variables']['filter']['iteration']
+  end
+
+  # -------------------------------------------------------------------
+  # Test 15: Fetches run executions with iteration range
+  # -------------------------------------------------------------------
+  def test_fetches_run_executions_with_range
+    run_data = {
+      'data' => {
+        'run' => {
+          'executions' => [
+            { 'iteration' => 10, 'status' => 'SUCCEEDED', 'output' => 'a', 'result' => nil,
+              'prompt' => nil, 'step' => { 'name' => 'Extract Info' },
+              'started' => nil, 'finished' => nil },
+            { 'iteration' => 11, 'status' => 'SUCCEEDED', 'output' => 'b', 'result' => nil,
+              'prompt' => nil, 'step' => { 'name' => 'Extract Info' },
+              'started' => nil, 'finished' => nil }
+          ]
+        }
+      }
+    }
+
+    mount_graphql_response(run_data)
+
+    client = WorkflowClient.new(base_url: @base_url, token: 'tok', org_id: 'org')
+    result = client.fetch_run_executions('100', step_name: 'Extract Info', iteration_min: 10, iteration_max: 11)
+
+    assert_equal 2, result['executions'].length
+
+    parsed = JSON.parse(@received_body)
+    filter = parsed['variables']['filter']
+    assert_equal 10, filter['iterationMin']
+    assert_equal 11, filter['iterationMax']
+    assert_nil filter['iteration']
+  end
+
   private
 
   def mount_graphql_response(response_hash)
