@@ -17,16 +17,21 @@ Working alpha. The audit skill can download project files, inspect runs, and com
 - [x] Test coverage for API layer (WEBrick-based fakes)
 - [x] Amy Smart case audit — completed, documented in `cases/Amy_Smart/audit_analysis.md`
 
+## In Progress
+
+- [ ] Valencia_Tiffany re-run (project 53, run 8564) — Letters Loop re-running with Medical Summary DOI prompt fix. Build Letters sort fix verified. ~8.5 hours, running overnight. After completion: verify DOI dates resolved, no regressions.
+
 ## Up Next
 
-- [ ] Audit next case (pending — Dean to share details)
+- [ ] Build "re-run from step N" feature — reset all executions for step N and downstream, then re-enqueue. Currently requires manual console script with FK-aware deletion order. Would save significant time on future partial re-runs.
+- [ ] Parallel Letters Loop processing — no dependencies between iterations, would cut 8.5hr re-runs dramatically. Already on main app roadmap.
 
 ## Backlog
 
 ### Cleanup & Simplification
 - [ ] Remove pandoc text-parsing fallback in `YoursTOCParser` — the `docx` gem handles DOCX parsing directly now, pandoc path is dead code for the primary use case
 - [ ] Review `TheirsTOCParser` page cap (currently 500) — could silently drop valid pages for large vendor PDFs. Confirm max expected page count or make configurable
-- [ ] Add CLAUDE.md (done) and keep roadmap updated
+- [x] Add CLAUDE.md and keep roadmap updated
 
 ### Move to Main App
 - [ ] Once audit workflow stabilizes, migrate API integration + audit logic into the Workflow Labs app as part of the report review feature
