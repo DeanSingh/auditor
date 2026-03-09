@@ -17,12 +17,13 @@ require_relative '../lib/cli_helpers'
 #   - Execution outputs may contain PHI — this tool outputs to stdout only (no files written)
 #   - Error messages are truncated to avoid leaking PHI
 class RunInspector
-  def initialize(run_id, step_name: nil, iteration: nil, iteration_min: nil, iteration_max: nil, base_url: nil, org_name: nil)
+  def initialize(run_id, step_name: nil, iteration: nil, iteration_min: nil, iteration_max: nil, output_path: nil, base_url: nil, org_name: nil)
     @run_id = run_id
     @step_name = step_name
     @iteration = iteration
     @iteration_min = iteration_min
     @iteration_max = iteration_max
+    @output_path = output_path
 
     config = AuditorConfig.new
     base = base_url || config.base_url
@@ -85,7 +86,7 @@ class RunInspector
       entry
     end
 
-    output = {
+    emit({
       'run' => {
         'id' => data['id'],
         'status' => data['status'],
@@ -97,9 +98,7 @@ class RunInspector
         'steps' => steps
       },
       'stats' => data['stats']
-    }
-
-    puts JSON.pretty_generate(output)
+    })
   end
 
   def drill_down
@@ -128,14 +127,23 @@ class RunInspector
       }
     end
 
-    output = {
+    emit({
       'step' => @step_name,
       'executions' => executions
-    }
-
-    puts JSON.pretty_generate(output)
+    })
   end
 
+  # Write JSON to --output file (with summary on stderr) or stdout.
+  def emit(data)
+    json = JSON.pretty_generate(data)
+
+    if @output_path
+      File.write(@output_path, json)
+      warn "Wrote #{json.bytesize} bytes to #{@output_path}"
+    else
+      puts json
+    end
+  end
 end
 
 # Main execution
@@ -143,6 +151,7 @@ if __FILE__ == $0
   step_name = nil
   iteration = nil
   iterations_raw = nil
+  output_path = nil
   base_url = nil
   org_name = nil
 
@@ -166,6 +175,10 @@ if __FILE__ == $0
       iterations_raw = range
     end
 
+    opts.on('-o', '--output FILE', 'Write JSON to file instead of stdout') do |path|
+      output_path = path
+    end
+
     opts.on('--org NAME', 'Organization name') do |name|
       org_name = name
     end
@@ -186,6 +199,7 @@ if __FILE__ == $0
       puts "  #{$0} https://workflow.ing/dashboard/runs/8564  # Summary (URL)"
       puts "  #{$0} 8564 --step \"Extract Info\" --iteration 123"
       puts "  #{$0} 8564 --step \"Extract Info\" --iterations 99-123"
+      puts "  #{$0} 8564 -o /tmp/run.json                         # Save to file"
       puts "  #{$0} 8564 --org \"Acme Medical\""
       exit 0
     end
@@ -234,6 +248,7 @@ if __FILE__ == $0
       iteration: iteration,
       iteration_min: iteration_min,
       iteration_max: iteration_max,
+      output_path: output_path,
       base_url: base_url,
       org_name: org_name
     )
