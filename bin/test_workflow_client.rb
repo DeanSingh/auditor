@@ -401,6 +401,109 @@ class TestWorkflowClient < Minitest::Test
     assert_nil filter['iteration']
   end
 
+  # -------------------------------------------------------------------
+  # Test 16: Fetches workflows list
+  # -------------------------------------------------------------------
+  def test_fetch_workflows
+    workflows_data = {
+      'data' => {
+        'workflows' => [
+          { 'id' => '1', 'name' => 'Record Review' },
+          { 'id' => '2', 'name' => 'Billing Weekly' }
+        ]
+      }
+    }
+
+    mount_graphql_response(workflows_data)
+
+    client = WorkflowClient.new(base_url: @base_url, token: 'tok', org_id: 'org')
+    result = client.fetch_workflows
+
+    assert_equal 2, result.length
+    assert_equal 'Record Review', result[0]['name']
+    assert_equal 'Billing Weekly', result[1]['name']
+
+    # Verify no query variable was sent
+    parsed = JSON.parse(@received_body)
+    assert_includes parsed['query'], 'ListWorkflows'
+    assert_empty parsed['variables']
+  end
+
+  # -------------------------------------------------------------------
+  # Test 17: Fetches workflows with query filter
+  # -------------------------------------------------------------------
+  def test_fetch_workflows_with_query
+    workflows_data = {
+      'data' => {
+        'workflows' => [
+          { 'id' => '1', 'name' => 'Record Review' }
+        ]
+      }
+    }
+
+    mount_graphql_response(workflows_data)
+
+    client = WorkflowClient.new(base_url: @base_url, token: 'tok', org_id: 'org')
+    result = client.fetch_workflows(query: 'Record')
+
+    assert_equal 1, result.length
+    assert_equal 'Record Review', result[0]['name']
+
+    # Verify query variable was sent
+    parsed = JSON.parse(@received_body)
+    assert_equal 'Record', parsed['variables']['query']
+  end
+
+  # -------------------------------------------------------------------
+  # Test 18: Fetches single workflow with steps
+  # -------------------------------------------------------------------
+  def test_fetch_workflow
+    workflow_data = {
+      'data' => {
+        'workflow' => {
+          'id' => '42',
+          'name' => 'Record Review',
+          'steps' => [
+            { 'id' => '1', 'name' => 'Extract Info', 'kind' => 'Action::Iterator', 'priority' => 0,
+              'action' => { '__typename' => 'Action__Iterator', 'kind' => 'pages', 'overKey' => 'pages',
+                            'untilKey' => nil, 'iterationLimit' => nil, 'timesIterations' => nil } },
+            { 'id' => '2', 'name' => 'Extract Output', 'kind' => 'Action::Prompt', 'priority' => 1,
+              'action' => { '__typename' => 'Action__Prompt', 'model' => 'claude-sonnet-4-20250514',
+                            'temperature' => 0.0, 'format' => 'json',
+                            'messages' => [{ 'role' => 'USER', 'template' => 'Extract from {{page}}' }] } },
+            { 'id' => '3', 'name' => 'Build Letters', 'kind' => 'Action::Code', 'priority' => 3,
+              'action' => { '__typename' => 'Action__Code', 'template' => 'DocumentSplitService.call(input)' } }
+          ]
+        }
+      }
+    }
+
+    mount_graphql_response(workflow_data)
+
+    client = WorkflowClient.new(base_url: @base_url, token: 'tok', org_id: 'org')
+    result = client.fetch_workflow('42')
+
+    assert_equal '42', result['id']
+    assert_equal 'Record Review', result['name']
+    assert_equal 3, result['steps'].length
+
+    extract = result['steps'].find { |s| s['name'] == 'Extract Info' }
+    assert_equal 'Action::Iterator', extract['kind']
+    assert_equal 'pages', extract['action']['overKey']
+
+    prompt = result['steps'].find { |s| s['name'] == 'Extract Output' }
+    assert_equal 'Action::Prompt', prompt['kind']
+    assert_equal 'claude-sonnet-4-20250514', prompt['action']['model']
+
+    code = result['steps'].find { |s| s['name'] == 'Build Letters' }
+    assert_equal 'Action::Code', code['kind']
+
+    # Verify correct query and variables
+    parsed = JSON.parse(@received_body)
+    assert_includes parsed['query'], 'GetWorkflow'
+    assert_equal '42', parsed['variables']['id']
+  end
+
   private
 
   def mount_graphql_response(response_hash)

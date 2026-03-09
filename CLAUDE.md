@@ -3,7 +3,7 @@
 Medical record review QA toolkit. Two modes of operation:
 
 1. **Pipeline mode** — Compares our indexed record review (DOCX/PDF) against a vendor's indexed PDF. Runs locally via `bin/run_pipeline.rb`.
-2. **Skill/agent mode** — Claude Code skill uses the API integration (`inspect_run.rb`, `download_project.rb`) to audit a human QA reviewer's log against the app's run data and word output.
+2. **Skill/agent mode** — Claude Code skill uses the API integration (`inspect_workflow.rb`, `inspect_run.rb`, `download_project.rb`) to audit a human QA reviewer's log against the app's run data and word output.
 
 The skill mode is the primary active use case. Pipeline mode is used when we have a vendor file to compare against (less common).
 
@@ -16,16 +16,18 @@ lib/
   cli_helpers.rb       — Shared CLI utilities (URL parsing, org resolution, error handling)
 
 bin/
-  download_project.rb  — Fetches project files from Workflow Labs, sets up case directory
-  inspect_run.rb       — Inspects a workflow run (summary + drill-down into step executions)
-  run_pipeline.rb      — Orchestrates the full vendor comparison pipeline (phases 1-4)
-  simple_reconcile.rb  — TOC parsing and comparison (yours vs theirs)
-  page_matcher.rb      — OCR-based page content matching
-  extract_hyperlinks.py — Extracts hyperlink-based page mappings from PDFs
+  download_project.rb    — Fetches project files from Workflow Labs, sets up case directory
+  inspect_run.rb         — Inspects a workflow run (summary + drill-down into step executions)
+  inspect_workflow.rb    — Lists workflows or shows full workflow detail (steps, prompts, config)
+  run_pipeline.rb        — Orchestrates the full vendor comparison pipeline (phases 1-4)
+  simple_reconcile.rb    — TOC parsing and comparison (yours vs theirs)
+  page_matcher.rb        — OCR-based page content matching
+  extract_hyperlinks.py  — Extracts hyperlink-based page mappings from PDFs
 
-  test_workflow_client.rb — Unit tests for WorkflowClient (WEBrick fakes)
-  test_inspect_run.rb     — Integration tests for inspect_run.rb CLI
-  test_toc_parsers.rb     — Tests for TOC parsing logic
+  test_workflow_client.rb     — Unit tests for WorkflowClient (WEBrick fakes)
+  test_inspect_run.rb         — Integration tests for inspect_run.rb CLI
+  test_inspect_workflow.rb    — Integration tests for inspect_workflow.rb CLI
+  test_toc_parsers.rb         — Tests for TOC parsing logic
 ```
 
 ## Key Concepts
@@ -34,6 +36,7 @@ bin/
 - **Logical vs physical pages**: TOC references logical page numbers; hyperlink mappings convert these to physical PDF pages.
 - **File Loop iterations**: 0-indexed in the app. Page 1 = iteration 0, page 124 = iteration 123.
 - **Run inspection**: Summary mode shows step structure + execution counts. Drill-down mode shows full output/result/prompt for a specific step+iteration.
+- **Workflow inspection**: List mode finds workflows by name. Detail mode shows the full step pipeline with action configs (prompts, iterator settings, code templates).
 
 ## HIPAA Considerations
 
@@ -49,7 +52,13 @@ bin/
 # Run tests
 ruby bin/test_workflow_client.rb
 ruby bin/test_inspect_run.rb
+ruby bin/test_inspect_workflow.rb
 ruby bin/test_toc_parsers.rb
+
+# List workflows / inspect a workflow
+bin/inspect_workflow.rb                          # List all workflows
+bin/inspect_workflow.rb --query "Record Review"  # Search by name
+bin/inspect_workflow.rb <workflow_id>             # Full detail with steps + action configs
 
 # Download a project's files
 bin/download_project.rb <project_id> [--org "Name"]

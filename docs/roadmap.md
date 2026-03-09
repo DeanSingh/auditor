@@ -2,7 +2,7 @@
 
 ## Current State
 
-Working alpha. The audit skill can download project files, inspect runs, and compare a human QA reviewer's log against app data. Pipeline mode works for vendor comparison but is used less frequently.
+Working alpha. The audit skill can list/inspect workflows, download project files, inspect runs, and compare a human QA reviewer's log against app data. Pipeline mode works for vendor comparison but is used less frequently.
 
 ## Completed
 
@@ -16,6 +16,7 @@ Working alpha. The audit skill can download project files, inspect runs, and com
 - [x] HIPAA-aware audit logging and file permissions
 - [x] Test coverage for API layer (WEBrick-based fakes)
 - [x] Amy Smart case audit — completed, documented in `cases/Amy_Smart/audit_analysis.md`
+- [x] `inspect_workflow.rb` — list workflows and inspect step details (prompts, iterators, code, formatters)
 
 ## In Progress
 

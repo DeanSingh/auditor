@@ -83,6 +83,52 @@ class WorkflowClient
     }
   GRAPHQL
 
+  WORKFLOWS_QUERY = <<~GRAPHQL
+    query ListWorkflows($query: String) {
+      workflows(query: $query) {
+        id
+        name
+      }
+    }
+  GRAPHQL
+
+  WORKFLOW_DETAIL_QUERY = <<~GRAPHQL
+    query GetWorkflow($id: ID!) {
+      workflow(id: $id) {
+        id
+        name
+        steps {
+          id
+          name
+          kind
+          priority
+          action {
+            ... on Action__Prompt {
+              model
+              temperature
+              format
+              messages { role template }
+            }
+            ... on Action__Iterator {
+              kind
+              overKey
+              untilKey
+              iterationLimit
+              timesIterations
+            }
+            ... on Action__Code {
+              template
+            }
+            ... on Action__Formatter {
+              template
+              json
+            }
+          }
+        }
+      }
+    }
+  GRAPHQL
+
   RUN_EXECUTIONS_QUERY = <<~GRAPHQL
     query InspectRunExecutions($id: ID!, $filter: ExecutionFilterInput) {
       run(id: $id) {
@@ -162,6 +208,27 @@ class WorkflowClient
     response = post_json(uri, body)
     data = parse_response(response)
     data['run']
+  end
+
+  # Fetches workflows, optionally filtered by search query.
+  # Returns array of workflow hashes.
+  def fetch_workflows(query: nil)
+    uri = @graphql_uri
+    variables = query ? { query: query } : {}
+    body = JSON.generate(query: WORKFLOWS_QUERY, variables: variables)
+    response = post_json(uri, body)
+    data = parse_response(response)
+    data['workflows'] || []
+  end
+
+  # Fetches a single workflow by ID with full step details.
+  # Returns the workflow hash.
+  def fetch_workflow(workflow_id)
+    uri = @graphql_uri
+    body = JSON.generate(query: WORKFLOW_DETAIL_QUERY, variables: { id: workflow_id })
+    response = post_json(uri, body)
+    data = parse_response(response)
+    data['workflow']
   end
 
   # Downloads a file from the given URL, following redirects.
