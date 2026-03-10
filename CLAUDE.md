@@ -56,17 +56,24 @@ ruby bin/test_inspect_workflow.rb
 ruby bin/test_toc_parsers.rb
 
 # List workflows / inspect a workflow
-bin/inspect_workflow.rb                          # List all workflows
-bin/inspect_workflow.rb --query "Record Review"  # Search by name
-bin/inspect_workflow.rb <workflow_id>             # Full detail with steps + action configs
+bin/inspect_workflow.rb                                        # List all workflows
+bin/inspect_workflow.rb --query "Record Review"                # Search by name
+bin/inspect_workflow.rb <workflow_id>                           # Full detail (flattened action configs)
+bin/inspect_workflow.rb <workflow_id> --step "Extract info"     # Single step detail
+bin/inspect_workflow.rb <workflow_id> -o /tmp/workflow.json     # Save to file
 
 # Download a project's files
 bin/download_project.rb <project_id> [--org "Name"]
 bin/download_project.rb --list-orgs
 
 # Inspect a run
-bin/inspect_run.rb <run_id>                                    # Summary
-bin/inspect_run.rb <run_id> --step "Extract Info" --iteration 5  # Drill-down
+bin/inspect_run.rb <run_id>                                               # Summary
+bin/inspect_run.rb <run_id> --step "Extract Info" --iteration 5           # Drill-down
+bin/inspect_run.rb <run_id> --step "Extract Info" --stats                 # Aggregate analysis
+bin/inspect_run.rb <run_id> --step "Extract Info" --summary               # Compact overview
+bin/inspect_run.rb <run_id> --step "Extract Info" --where "date=Unknown"  # Filter by result field
+bin/inspect_run.rb <run_id> --step "Extract Info" --fields date,thoughts  # Select result fields
+bin/inspect_run.rb <run_id> -o /tmp/run.json                              # Save to file
 
 # Run full vendor comparison pipeline
 bin/run_pipeline.rb --case "LastName_FirstName" <yours.docx> <theirs.pdf>

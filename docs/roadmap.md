@@ -17,6 +17,14 @@ Working alpha. The audit skill can list/inspect workflows, download project file
 - [x] Test coverage for API layer (WEBrick-based fakes)
 - [x] Amy Smart case audit — completed, documented in `cases/Amy_Smart/audit_analysis.md`
 - [x] `inspect_workflow.rb` — list workflows and inspect step details (prompts, iterators, code, formatters)
+- [x] CLI improvements — both `inspect_run.rb` and `inspect_workflow.rb`:
+  - Flattened output (prompt_template, iterator, code fields at top level instead of nested action)
+  - `--step` filter for single-step detail, `-o` flag for file output
+  - `--stats` mode for aggregate analysis (date distribution, Unknown breakdown by subcategory/provider)
+  - `--summary` for compact per-iteration overview (iteration, filename, date, category, provider)
+  - `--where` for result field filtering (e.g., `--where "date=Unknown"`)
+  - `--fields` for selecting specific result fields (e.g., `--fields date,thoughts`)
+  - Case-insensitive step name matching with "did you mean?" suggestions
 
 ## In Progress
 
