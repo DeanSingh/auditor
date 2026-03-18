@@ -5,7 +5,17 @@
 # Priority: environment variables > config file > defaults
 #
 # Config file location: ~/.config/auditor/config
-# Format: key=value, one per line. Blank lines and # comments are ignored.
+# Format: INI-style sections with key=value pairs.
+#
+#   [production]
+#   token=abc123
+#   base_url=https://workflow.ing
+#
+#   [local]
+#   token=xyz789
+#   base_url=http://localhost:3000
+#
+# Select environment via --env flag or WORKFLOW_ENV (default: production).
 class AuditorConfig
   class MissingConfigError < StandardError; end
 
@@ -18,8 +28,11 @@ class AuditorConfig
     base_url: 'WORKFLOW_BASE_URL'
   }.freeze
 
-  def initialize(config_path: DEFAULT_CONFIG_PATH)
+  attr_reader :env
+
+  def initialize(config_path: DEFAULT_CONFIG_PATH, env: nil)
     @config_path = config_path
+    @env = env || ENV.fetch('WORKFLOW_ENV', 'production')
     @file_values = parse_config_file
   end
 
@@ -43,7 +56,7 @@ class AuditorConfig
 
   def env_or_file(key)
     env_val = ENV[ENV_VARS[key]]
-    return env_val if env_val && !env_val.empty?
+    return env_val unless env_val.nil? || env_val.empty?
 
     @file_values[key.to_s]
   end
@@ -53,15 +66,10 @@ class AuditorConfig
 
     check_file_permissions
 
-    values = {}
-    File.foreach(@config_path) do |line|
-      line = line.strip
-      next if line.empty? || line.start_with?('#')
-
-      key, value = line.split('=', 2)
-      values[key.strip] = value&.strip
-    end
-    values
+    require 'yaml'
+    data = YAML.load_file(@config_path) || {}
+    section = data[@env] || data['production'] || {}
+    section.transform_keys(&:to_s)
   end
 
   def check_file_permissions

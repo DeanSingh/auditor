@@ -35,6 +35,9 @@ wheels/
 /test/version_tmp/
 /tmp/
 
+# Claude Code
+.claude/settings.local.json
+
 # Editors
 .vscode/
 .idea/

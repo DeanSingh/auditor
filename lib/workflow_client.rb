@@ -33,6 +33,9 @@ class WorkflowClient
           status
           kind
           file { filename url bytesize type }
+          pageCount
+          processedPageCount
+          lettersCount
         }
         runs {
           id
@@ -79,6 +82,13 @@ class WorkflowClient
           status
           step { name }
         }
+        document {
+          ... on RecordReview {
+            lettersCount
+            sourcePages { count }
+          }
+        }
+        documentable
       }
     }
   GRAPHQL
@@ -115,6 +125,9 @@ class WorkflowClient
               untilKey
               iterationLimit
               timesIterations
+              batchSize
+              concurrent
+              concurrency
             }
             ... on Action__Code {
               template
@@ -122,6 +135,28 @@ class WorkflowClient
             ... on Action__Formatter {
               template
               json
+            }
+          }
+        }
+      }
+    }
+  GRAPHQL
+
+  RUN_DOCUMENT_LETTERS_QUERY = <<~GRAPHQL
+    query InspectRunDocumentLetters($id: ID!) {
+      run(id: $id) {
+        document {
+          ... on RecordReview {
+            lettersCount
+            letters {
+              id
+              index
+              date
+              provider
+              category
+              subcategory
+              pageCount
+              pages { pageNumber }
             }
           }
         }
@@ -157,78 +192,43 @@ class WorkflowClient
 
   # Fetches the user's organizations.
   def fetch_organizations
-    uri = @graphql_uri
-    body = JSON.generate(query: ORGS_QUERY)
-    response = post_json(uri, body)
-    data = parse_response(response)
-    data['organizations'] || []
+    graphql(ORGS_QUERY, 'organizations') || []
   end
 
-  # Fetches a project by ID via the GraphQL API.
-  # Returns the project hash from the response data.
+  # Fetches a project by ID.
   def fetch_project(project_id)
-    uri = @graphql_uri
-
-    body = JSON.generate(
-      query: PROJECT_QUERY,
-      variables: { id: project_id }
-    )
-
-    response = post_json(uri, body)
-    data = parse_response(response)
-
-    data['project']
+    graphql(PROJECT_QUERY, 'project', id: project_id)
   end
 
   # Fetches a run summary (workflow structure + lightweight execution list).
-  # Returns the run hash with workflow, steps, stats, and execution ids/statuses.
   def fetch_run_summary(run_id)
-    uri = @graphql_uri
-    body = JSON.generate(query: RUN_SUMMARY_QUERY, variables: { id: run_id })
-    response = post_json(uri, body)
-    data = parse_response(response)
-    data['run']
+    graphql(RUN_SUMMARY_QUERY, 'run', id: run_id)
   end
 
   # Fetches execution details for a specific step and iteration range.
-  # Returns the run hash with filtered executions including full output/result.
   def fetch_run_executions(run_id, step_name:, iteration: nil, iteration_min: nil, iteration_max: nil)
-    uri = @graphql_uri
-
     filter = { stepName: step_name }
     filter[:iteration] = iteration if iteration
     filter[:iterationMin] = iteration_min if iteration_min
     filter[:iterationMax] = iteration_max if iteration_max
 
-    body = JSON.generate(
-      query: RUN_EXECUTIONS_QUERY,
-      variables: { id: run_id, filter: filter }
-    )
+    graphql(RUN_EXECUTIONS_QUERY, 'run', id: run_id, filter: filter)
+  end
 
-    response = post_json(uri, body)
-    data = parse_response(response)
-    data['run']
+  # Fetches document letters for a run via the RunDocument union type.
+  def fetch_run_document_letters(run_id)
+    graphql(RUN_DOCUMENT_LETTERS_QUERY, %w[run document letters], id: run_id)
   end
 
   # Fetches workflows, optionally filtered by search query.
-  # Returns array of workflow hashes.
   def fetch_workflows(query: nil)
-    uri = @graphql_uri
     variables = query ? { query: query } : {}
-    body = JSON.generate(query: WORKFLOWS_QUERY, variables: variables)
-    response = post_json(uri, body)
-    data = parse_response(response)
-    data['workflows'] || []
+    graphql(WORKFLOWS_QUERY, 'workflows', **variables) || []
   end
 
   # Fetches a single workflow by ID with full step details.
-  # Returns the workflow hash.
   def fetch_workflow(workflow_id)
-    uri = @graphql_uri
-    body = JSON.generate(query: WORKFLOW_DETAIL_QUERY, variables: { id: workflow_id })
-    response = post_json(uri, body)
-    data = parse_response(response)
-    data['workflow']
+    graphql(WORKFLOW_DETAIL_QUERY, 'workflow', id: workflow_id)
   end
 
   # Downloads a file from the given URL, following redirects.
@@ -270,6 +270,16 @@ class WorkflowClient
   end
 
   private
+
+  # Executes a GraphQL query and digs into the response.
+  # `result_path` can be a string key or an array of keys for nested access.
+  # Additional keyword arguments are passed as GraphQL variables.
+  def graphql(query, result_path, **variables)
+    body = JSON.generate(query: query, variables: variables)
+    response = post_json(@graphql_uri, body)
+    data = parse_response(response)
+    data.dig(*Array(result_path))
+  end
 
   # POST JSON to the GraphQL endpoint with auth headers.
   def post_json(uri, body)
@@ -321,16 +331,16 @@ class WorkflowClient
           "HTTPS required for non-localhost connections (got #{uri.scheme}://#{uri.host})"
   end
 
+  LOCALHOST_HOSTS = %w[localhost 127.0.0.1].freeze
+
   def localhost?(host)
-    host == 'localhost' || host == '127.0.0.1'
+    LOCALHOST_HOSTS.include?(host)
   end
 
   def build_http(uri)
     http = Net::HTTP.new(uri.host, uri.port)
     http.use_ssl = (uri.scheme == 'https')
-    if http.use_ssl?
-      http.verify_mode = OpenSSL::SSL::VERIFY_PEER
-    end
+    http.verify_mode = OpenSSL::SSL::VERIFY_PEER if http.use_ssl?
     http.open_timeout = 10
     http.read_timeout = 30
     http

@@ -36,7 +36,17 @@ bin/
 - **Logical vs physical pages**: TOC references logical page numbers; hyperlink mappings convert these to physical PDF pages.
 - **File Loop iterations**: 0-indexed in the app. Page 1 = iteration 0, page 124 = iteration 123.
 - **Run inspection**: Summary mode shows step structure + execution counts. Drill-down mode shows full output/result/prompt for a specific step+iteration.
+- **Iteration filtering**: `--iterations` accepts ranges (`10-25`) or comma-separated lists (`10,13,14,21`). Comma-separated lists fetch the enclosing range from the API and filter client-side.
 - **Workflow inspection**: List mode finds workflows by name. Detail mode shows the full step pipeline with action configs (prompts, iterator settings, code templates).
+
+## Record Review Workflows
+
+Two workflow types are supported for record review:
+
+- **Record Review** (old pipeline) — File Loop over run files, per-page Extract Info/Extract Output with continuation flags, Build Letters code step, Letters formatter step. Uses `RunDocument::RecordReview` to assemble letters from execution results.
+- **Record Review Batch** (document-first) — File Loop over `_document.pages`, `DocumentSplitService` creates Letters on the Document model, metadata synced to pages. Iterator steps may use `batchSize`, `concurrent`, and `concurrency` fields.
+
+The CLI auto-detects the workflow type based on whether the run has a `document` association (via the `documentable` field). Old-pipeline features (continuation analysis, Build Letters inspection) remain fully functional.
 
 ## HIPAA Considerations
 
@@ -67,12 +77,14 @@ bin/download_project.rb <project_id> [--org "Name"]
 bin/download_project.rb --list-orgs
 
 # Inspect a run
-bin/inspect_run.rb <run_id>                                               # Summary
+bin/inspect_run.rb <run_id>                                               # Summary (auto-detects workflow type)
 bin/inspect_run.rb <run_id> --step "Extract Info" --iteration 5           # Drill-down
 bin/inspect_run.rb <run_id> --step "Extract Info" --stats                 # Aggregate analysis
 bin/inspect_run.rb <run_id> --step "Extract Info" --summary               # Compact overview
 bin/inspect_run.rb <run_id> --step "Extract Info" --where "date=Unknown"  # Filter by result field
 bin/inspect_run.rb <run_id> --step "Extract Info" --fields date,thoughts  # Select result fields
+bin/inspect_run.rb <run_id> --letters                                     # Letter details (batch runs)
+bin/inspect_run.rb <run_id> --pages                                       # Page metadata (batch runs)
 bin/inspect_run.rb <run_id> -o /tmp/run.json                              # Save to file
 
 # Run full vendor comparison pipeline

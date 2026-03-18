@@ -102,7 +102,8 @@ class WorkflowInspector
       messages = action['messages'] || []
       entry['prompt_template'] = messages.map { |m| "#{m['role']}:\n#{m['template']}" }.join("\n\n")
     when 'ITERATOR'
-      entry['iterator'] = action.slice('kind', 'overKey', 'untilKey', 'iterationLimit', 'timesIterations')
+      entry['iterator'] = action.slice('kind', 'overKey', 'untilKey', 'iterationLimit', 'timesIterations',
+                                       'batchSize', 'concurrent', 'concurrency')
     when 'CODE'
       entry['code'] = action['template']
     when 'FORMATTER'

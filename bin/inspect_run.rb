@@ -9,7 +9,7 @@ require_relative '../lib/cli_helpers'
 #
 # Two modes:
 #   Summary:    bin/inspect_run.rb <run_id>
-#   Drill-down: bin/inspect_run.rb <run_id> --step "Extract Info" --iteration 123
+#   Drill-down: bin/inspect_run.rb <run_id> --step "Extract info" --iteration 123
 #
 # Outputs JSON to stdout for consumption by the auditor agent.
 #
@@ -18,20 +18,25 @@ require_relative '../lib/cli_helpers'
 #   - Error messages are truncated to avoid leaking PHI
 class RunInspector
   def initialize(run_id, step_name: nil, iteration: nil, iteration_min: nil, iteration_max: nil,
+                 iteration_list: nil,
                  output_path: nil, stats: false, compact: false, fields: nil, where_filters: nil,
-                 base_url: nil, org_name: nil)
+                 letters: false, pages: false,
+                 env: nil, base_url: nil, org_name: nil)
     @run_id = run_id
     @step_name = step_name
     @iteration = iteration
     @iteration_min = iteration_min
     @iteration_max = iteration_max
+    @iteration_list = iteration_list
     @output_path = output_path
     @stats = stats
     @compact = compact
     @fields = fields
     @where_filters = where_filters || []
+    @letters = letters
+    @pages = pages
 
-    config = AuditorConfig.new
+    config = AuditorConfig.new(env: env)
     base = base_url || config.base_url
 
     org_id = CLIHelpers.resolve_org_id(base_url: base, token: config.token!, name: org_name) if org_name
@@ -46,7 +51,11 @@ class RunInspector
   def run
     resolve_step_name! if @step_name
 
-    if @stats && @step_name
+    if @letters
+      show_letters
+    elsif @pages
+      show_pages
+    elsif @stats && @step_name
       stats
     elsif @step_name
       drill_down
@@ -128,7 +137,7 @@ class RunInspector
       entry
     end
 
-    emit({
+    result = {
       'run' => {
         'id' => data['id'],
         'status' => data['status'],
@@ -140,7 +149,93 @@ class RunInspector
         'steps' => steps
       },
       'stats' => data['stats']
-    })
+    }
+
+    # Add document section for document-first (Record Review Batch) runs
+    if document_first?(data)
+      doc = data['document']
+      source_pages_count = doc.dig('sourcePages', 'count') || 0
+      letters_count = doc['lettersCount'] || 0
+
+      result['document'] = {
+        'type' => 'document_first',
+        'source_pages' => source_pages_count,
+        'letters_count' => letters_count
+      }
+      result['run']['workflow_type'] = 'Record Review Batch'
+    else
+      result['run']['workflow_type'] = 'Record Review'
+    end
+
+    emit(result)
+  end
+
+  # Show letter details for document-first runs.
+  # Falls back to RecordReview document letters from the Run's document field.
+  def show_letters
+    data = fetch_run!(:fetch_run_summary)
+
+    unless document_first?(data)
+      warn 'Error: --letters requires a document-first (Record Review Batch) run'
+      warn 'For old-pipeline runs, use --step "Letters" to inspect letter executions'
+      exit 1
+    end
+
+    doc = data['document']
+    letters_count = doc['lettersCount'] || 0
+
+    if letters_count.zero?
+      warn 'No letters found for this run'
+      exit 0
+    end
+
+    # Fetch letters through the run executions for the Letters/Formatted Record Steps
+    # The RecordReview document type provides letters via the API
+    letters_data = @client.fetch_run_document_letters(@run_id)
+    letters = letters_data || []
+
+    rows = letters.each_with_index.map do |letter, i|
+      {
+        'index' => i + 1,
+        'id' => letter['id'],
+        'date' => letter['date'],
+        'provider' => letter['provider'],
+        'category' => letter['category'],
+        'page_count' => letter['pageCount'],
+        'pages' => (letter['pages'] || []).map { |p| p['pageNumber'] }
+      }
+    end
+
+    emit({ 'run_id' => @run_id, 'letters_count' => letters.size, 'letters' => rows })
+  end
+
+  # Show page metadata for document-first runs.
+  def show_pages
+    data = fetch_run!(:fetch_run_summary)
+
+    unless document_first?(data)
+      warn 'Error: --pages requires a document-first (Record Review Batch) run'
+      warn 'For old-pipeline runs, use --step "Extract info" --summary to see page data'
+      exit 1
+    end
+
+    # Use the Extract info step executions to get per-page metadata
+    exec_data = @client.fetch_run_executions(@run_id, step_name: 'Extract info')
+    executions = exec_data ? (exec_data['executions'] || []) : []
+
+    rows = executions.select { |e| e['status'] == 'SUCCEEDED' }.map do |e|
+      result = parse_result(e) || {}
+      {
+        'page' => e['iteration'],
+        'date' => result['date'] || 'Unknown',
+        'provider' => result['provider'],
+        'category' => result['doc_category'],
+        'subcategory' => result['doc_subcategory'],
+        'continuation' => result['continuation']
+      }
+    end
+
+    emit({ 'run_id' => @run_id, 'page_count' => rows.size, 'pages' => rows })
   end
 
   def drill_down
@@ -152,6 +247,11 @@ class RunInspector
     )
 
     raw_executions = apply_where_filters(data['executions'] || [])
+
+    # Client-side filter for comma-separated iteration lists
+    if @iteration_list
+      raw_executions = raw_executions.select { |e| @iteration_list.include?(e['iteration']) }
+    end
 
     if @compact
       # --summary: compact output with key fields per iteration
@@ -239,6 +339,13 @@ class RunInspector
     })
   end
 
+  # Detect whether this is a document-first (Record Review Batch) run.
+  # Document-first runs have a non-nil document with lettersCount or sourcePages.
+  # Old-pipeline runs have document: nil or documentable: false.
+  def document_first?(data)
+    data['documentable'] == true || data['document'].is_a?(Hash)
+  end
+
   # Parse the result field — it may be a JSON string or already a hash.
   def parse_result(execution)
     result = execution['result']
@@ -324,6 +431,9 @@ if __FILE__ == $0
   compact = false
   fields = nil
   where_filters = []
+  letters = false
+  pages = false
+  env = nil
   base_url = nil
   org_name = nil
 
@@ -335,7 +445,7 @@ if __FILE__ == $0
     opts.separator ''
     opts.separator 'Options:'
 
-    opts.on('--step NAME', 'Step name to drill into (e.g., "Extract Info")') do |name|
+    opts.on('--step NAME', 'Step name to drill into (e.g., "Extract info")') do |name|
       step_name = name
     end
 
@@ -343,7 +453,7 @@ if __FILE__ == $0
       iteration = n
     end
 
-    opts.on('--iterations RANGE', 'Iteration range to fetch (e.g., "99-123")') do |range|
+    opts.on('--iterations RANGE', 'Iterations: range (99-123) or comma-separated (10,13,14)') do |range|
       iterations_raw = range
     end
 
@@ -367,6 +477,18 @@ if __FILE__ == $0
       where_filters << expr
     end
 
+    opts.on('--letters', 'Show letter details (document-first / Record Review Batch runs)') do
+      letters = true
+    end
+
+    opts.on('--pages', 'Show page metadata (document-first / Record Review Batch runs)') do
+      pages = true
+    end
+
+    opts.on('--env ENV', 'Config environment: production (default) or local') do |e|
+      env = e
+    end
+
     opts.on('--org NAME', 'Organization name') do |name|
       org_name = name
     end
@@ -381,16 +503,20 @@ if __FILE__ == $0
       puts 'Modes:'
       puts '  Summary (no --step):     Shows workflow structure and per-step execution counts'
       puts '  Drill-down (with --step): Shows full execution data for a step + iteration'
+      puts '  Letters (--letters):      Shows letter details (document-first runs only)'
+      puts '  Pages (--pages):          Shows page metadata (document-first runs only)'
       puts
       puts 'Examples:'
       puts "  #{$0} 8564                                     # Summary"
       puts "  #{$0} https://workflow.ing/dashboard/runs/8564  # Summary (URL)"
-      puts "  #{$0} 8564 --step \"Extract Info\" --iteration 123"
-      puts "  #{$0} 8564 --step \"Extract Info\" --iterations 99-123"
-      puts "  #{$0} 8564 --step \"Extract Info\" --stats              # Aggregate analysis"
-      puts "  #{$0} 8564 --step \"Extract Info\" --summary            # Compact overview"
-      puts "  #{$0} 8564 --step \"Extract Info\" --where \"date=Unknown\"  # Filter by field"
-      puts "  #{$0} 8564 --step \"Extract Info\" --fields date,thoughts   # Select result fields"
+      puts "  #{$0} 8564 --step \"Extract info\" --iteration 123"
+      puts "  #{$0} 8564 --step \"Extract info\" --iterations 99-123"
+      puts "  #{$0} 8564 --step \"Extract info\" --stats              # Aggregate analysis"
+      puts "  #{$0} 8564 --step \"Extract info\" --summary            # Compact overview"
+      puts "  #{$0} 8564 --step \"Extract info\" --where \"date=Unknown\"  # Filter by field"
+      puts "  #{$0} 8564 --step \"Extract info\" --fields date,thoughts   # Select result fields"
+      puts "  #{$0} 8564 --letters                                 # Letter details (batch runs)"
+      puts "  #{$0} 8564 --pages                                   # Page metadata (batch runs)"
       puts "  #{$0} 8564 -o /tmp/run.json                         # Save to file"
       puts "  #{$0} 8564 --org \"Acme Medical\""
       exit 0
@@ -409,20 +535,27 @@ if __FILE__ == $0
     exit 1
   end
 
-  if iterations_raw && !iterations_raw.match?(/\A\d+-\d+\z/)
-    warn 'Error: --iterations must be in format N-M (e.g., "99-123")'
-    exit 1
-  end
-
-  # Parse iterations range into integers once
+  # Parse iterations: supports ranges (10-25) and comma-separated (10,13,14,21)
   iteration_min = nil
   iteration_max = nil
+  iteration_list = nil
   if iterations_raw
-    parts = iterations_raw.split('-', 2)
-    iteration_min = parts[0].to_i
-    iteration_max = parts[1].to_i
-    if iteration_min > iteration_max
-      warn "Error: --iterations min (#{parts[0]}) must be <= max (#{parts[1]})"
+    if iterations_raw.include?(',')
+      # Comma-separated: 10,13,14,21
+      iteration_list = iterations_raw.split(',').map(&:strip).map(&:to_i)
+      iteration_min = iteration_list.min
+      iteration_max = iteration_list.max
+    elsif iterations_raw.match?(/\A\d+-\d+\z/)
+      # Range: 10-25
+      parts = iterations_raw.split('-', 2)
+      iteration_min = parts[0].to_i
+      iteration_max = parts[1].to_i
+      if iteration_min > iteration_max
+        warn "Error: --iterations min (#{parts[0]}) must be <= max (#{parts[1]})"
+        exit 1
+      end
+    else
+      warn 'Error: --iterations must be a range (99-123) or comma-separated (10,13,14)'
       exit 1
     end
   end
@@ -445,11 +578,15 @@ if __FILE__ == $0
       iteration: iteration,
       iteration_min: iteration_min,
       iteration_max: iteration_max,
+      iteration_list: iteration_list,
       output_path: output_path,
       stats: stats,
       compact: compact,
       fields: fields,
       where_filters: where_filters,
+      letters: letters,
+      pages: pages,
+      env: env,
       base_url: base_url,
       org_name: org_name
     )

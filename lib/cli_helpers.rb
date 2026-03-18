@@ -31,12 +31,11 @@ module CLIHelpers
   def self.resolve_org_id(base_url:, token:, name:)
     client = WorkflowClient.new(base_url: base_url, token: token, org_id: nil)
     orgs = client.fetch_organizations
-    match = orgs.find { |o| o['name'].downcase == name.downcase }
+    match = orgs.find { |o| o['name'].casecmp?(name) }
 
     if match.nil?
-      available = orgs.map { |o| o['name'] }.join(', ')
       warn "Error: Organization \"#{name}\" not found"
-      warn "Available: #{available}"
+      warn "Available: #{orgs.map { |o| o['name'] }.join(', ')}"
       exit 1
     end
 
@@ -61,8 +60,13 @@ module CLIHelpers
     exit 1
   rescue StandardError => e
     msg = "#{e.class}: #{e.message}"
-    msg = "#{msg[0...MAX_ERROR_LENGTH]}..." if msg.length > MAX_ERROR_LENGTH
-    warn "Unexpected error: #{msg}"
+    warn "Unexpected error: #{truncate(msg, MAX_ERROR_LENGTH)}"
     exit 1
+  end
+
+  def self.truncate(str, max)
+    return str if str.length <= max
+
+    "#{str[0...max]}..."
   end
 end
