@@ -4,10 +4,11 @@
 require 'csv'
 require 'json'
 require 'set'
-require 'tempfile'
+require_relative '../lib/page_comparison'
 
 # Extract and compare page content to find matching pages across two PDFs
 class PageContentMatcher
+  include PageComparison
   def initialize(yours_pdf, theirs_pdf, yours_mapping: nil, theirs_mapping: nil, base_path: '.', yours_source: nil)
     @yours_pdf = yours_pdf
     @theirs_pdf = theirs_pdf
@@ -215,82 +216,6 @@ class PageContentMatcher
     end
   end
 
-  # Create a fingerprint from page text
-  def create_fingerprint(text)
-    normalized = text.downcase.gsub(/\s+/, ' ').strip
-
-    # Extract dates (MM/DD/YYYY or variations)
-    dates = normalized.scan(/\d{1,2}\/\d{1,2}\/\d{2,4}/)
-
-    # Extract potential provider names (words followed by MD, DO, PA, etc.)
-    providers = normalized.scan(/\w+(?:,?\s+(?:md|do|pa|np|dc|dds|phd|psyd))/i)
-
-    # Extract first 200 characters as base fingerprint
-    preview = normalized[0..200] || ""
-
-    # Extract key medical terms
-    medical_terms = normalized.scan(/(?:office visit|x-ray|mri|therapy|report|encounter|consultation|examination|treatment)/)
-
-    {
-      preview: preview,
-      dates: dates.uniq,
-      providers: providers.uniq,
-      medical_terms: medical_terms.uniq,
-      full_text: normalized
-    }
-  end
-
-  # Calculate similarity between two fingerprints
-  def calculate_similarity(fp1, fp2)
-    scores = []
-
-    # Date overlap
-    if !fp1[:dates].empty? && !fp2[:dates].empty?
-      date_overlap = (fp1[:dates] & fp2[:dates]).size.to_f / [fp1[:dates].size, fp2[:dates].size].max
-      scores << date_overlap * 3.0 # Weight dates heavily
-    end
-
-    # Provider overlap
-    if !fp1[:providers].empty? && !fp2[:providers].empty?
-      provider_overlap = (fp1[:providers] & fp2[:providers]).size.to_f / [fp1[:providers].size, fp2[:providers].size].max
-      scores << provider_overlap * 2.0 # Weight providers heavily
-    end
-
-    # Preview text similarity (simple character overlap)
-    preview_similarity = text_overlap(fp1[:preview], fp2[:preview])
-    scores << preview_similarity
-
-    # Medical terms overlap
-    if !fp1[:medical_terms].empty? && !fp2[:medical_terms].empty?
-      terms_overlap = (fp1[:medical_terms] & fp2[:medical_terms]).size.to_f / [fp1[:medical_terms].size, fp2[:medical_terms].size].max
-      scores << terms_overlap
-    end
-
-    # Full text similarity (for final check)
-    full_similarity = text_overlap(fp1[:full_text][0..500], fp2[:full_text][0..500])
-    scores << full_similarity * 2.0
-
-    return 0.0 if scores.empty?
-
-    scores.sum / scores.size
-  end
-
-  # Calculate text overlap using a simple character-based approach
-  def text_overlap(text1, text2)
-    return 0.0 if text1.empty? || text2.empty?
-
-    # Tokenize into words
-    words1 = text1.split
-    words2 = text2.split
-
-    return 0.0 if words1.empty? || words2.empty?
-
-    # Calculate Jaccard similarity
-    intersection = (words1 & words2).size.to_f
-    union = (words1 | words2).size.to_f
-
-    union > 0 ? intersection / union : 0.0
-  end
 end
 
 # Generate final discrepancy report

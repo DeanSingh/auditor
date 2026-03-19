@@ -14,6 +14,7 @@ lib/
   config.rb            — Reads credentials from env vars or ~/.config/auditor/config
   workflow_client.rb   — GraphQL HTTP client for Workflow Labs API
   cli_helpers.rb       — Shared CLI utilities (URL parsing, org resolution, error handling)
+  page_comparison.rb   — Shared page comparison (fingerprinting, similarity, OCR extraction)
 
 bin/
   download_project.rb    — Fetches project files from Workflow Labs, sets up case directory

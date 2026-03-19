@@ -38,14 +38,15 @@ class RunInspector
 
     config = AuditorConfig.new(env: env)
     base = base_url || config.base_url
+    token = config.token!
 
-    org_id = CLIHelpers.resolve_org_id(base_url: base, token: config.token!, name: org_name) if org_name
+    org_id = if org_name
+               CLIHelpers.resolve_org_id(base_url: base, token:, name: org_name)
+             else
+               CLIHelpers.auto_resolve_org_id(base_url: base, token:)
+             end
 
-    @client = WorkflowClient.new(
-      base_url: base,
-      token: config.token!,
-      org_id: org_id
-    )
+    @client = WorkflowClient.new(base_url: base, token:, org_id:)
   end
 
   def run
@@ -569,7 +570,12 @@ if __FILE__ == $0
     exit 1
   end
 
-  run_id = CLIHelpers.parse_resource_id(ARGV.first, path_segment: 'runs')
+  run_id, url_base = CLIHelpers.parse_resource_id(ARGV.first, path_segment: 'runs')
+
+  # Auto-detect environment from URL if --env not explicitly set
+  if env.nil? && url_base
+    env = CLIHelpers.env_for_url(url_base)
+  end
 
   CLIHelpers.run_with_error_handling do
     inspector = RunInspector.new(
@@ -587,7 +593,7 @@ if __FILE__ == $0
       letters: letters,
       pages: pages,
       env: env,
-      base_url: base_url,
+      base_url: base_url || url_base,
       org_name: org_name
     )
     inspector.run

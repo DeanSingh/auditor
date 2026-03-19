@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "Bash(WORKFLOW_ENV=production ruby bin/download_project.rb --list-orgs)"
     ]
   }
 }

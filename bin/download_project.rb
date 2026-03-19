@@ -23,17 +23,13 @@ class ProjectDownloader
   def initialize(project_id, case_name: nil, base_url: nil, org_name: nil)
     @project_id = project_id
     @case_name_override = case_name
-    @config = AuditorConfig.new
-    @base_url = base_url || @config.base_url
+    config = AuditorConfig.new
+    @base_url = base_url || config.base_url
+    token = config.token!
 
-    # Resolve org by name if provided
-    org_id = CLIHelpers.resolve_org_id(base_url: @base_url, token: @config.token!, name: org_name) if org_name
+    org_id = CLIHelpers.resolve_org_id(base_url: @base_url, token: token, name: org_name) if org_name
 
-    @client = WorkflowClient.new(
-      base_url: @base_url,
-      token: @config.token!,
-      org_id: org_id
-    )
+    @client = WorkflowClient.new(base_url: @base_url, token: token, org_id: org_id)
   end
 
   def run
@@ -334,10 +330,10 @@ if __FILE__ == $0
     exit 1
   end
 
-  project_id = CLIHelpers.parse_resource_id(ARGV.first, path_segment: 'projects')
+  project_id, url_base = CLIHelpers.parse_resource_id(ARGV.first, path_segment: 'projects')
 
   CLIHelpers.run_with_error_handling do
-    downloader = ProjectDownloader.new(project_id, case_name: case_name, base_url: base_url, org_name: org_name)
+    downloader = ProjectDownloader.new(project_id, case_name: case_name, base_url: base_url || url_base, org_name: org_name)
     downloader.run
   end
 end

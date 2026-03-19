@@ -34,7 +34,7 @@ class TestAuditorConfig < Minitest::Test
 
   def test_reads_all_values_from_config_file
     config_file = Tempfile.new('auditor_config')
-    config_file.write("token=file_token_abc\norg_id=file_org_789\nbase_url=https://custom.example.com\n")
+    config_file.write("production:\n  token: file_token_abc\n  org_id: file_org_789\n  base_url: https://custom.example.com\n")
     config_file.close
     File.chmod(0o600, config_file.path)
 
@@ -49,7 +49,7 @@ class TestAuditorConfig < Minitest::Test
 
   def test_env_var_overrides_config_file
     config_file = Tempfile.new('auditor_config')
-    config_file.write("token=file_token\norg_id=file_org\n")
+    config_file.write("production:\n  token: file_token\n  org_id: file_org\n")
     config_file.close
     File.chmod(0o600, config_file.path)
 
@@ -89,10 +89,11 @@ class TestAuditorConfig < Minitest::Test
     config_file = Tempfile.new('auditor_config')
     config_file.write(<<~CONFIG)
       # This is a comment
-      token=parsed_token
+      production:
+        token: parsed_token
 
-      # Another comment
-      org_id=parsed_org
+        # Another comment
+        org_id: parsed_org
 
     CONFIG
     config_file.close
@@ -108,7 +109,7 @@ class TestAuditorConfig < Minitest::Test
 
   def test_warns_on_insecure_file_permissions
     config_file = Tempfile.new('auditor_config')
-    config_file.write("token=insecure_token\n")
+    config_file.write("production:\n  token: insecure_token\n")
     config_file.close
     File.chmod(0o644, config_file.path)
 

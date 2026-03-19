@@ -133,7 +133,7 @@ class TestInspectRun < Minitest::Test
   def test_rejects_invalid_iterations_format
     out, status = run_script('200', '--step', 'Extract Info', '--iterations', 'abc', '--base-url', @base_url)
     refute status.success?
-    assert_includes out, 'format N-M'
+    assert_includes out, '--iterations must be a range'
   end
 
   def test_exits_with_error_for_invalid_input
@@ -202,11 +202,22 @@ class TestInspectRun < Minitest::Test
     }
   end
 
+  # Returns a single-org response for the organizations query so
+  # auto_resolve_org_id succeeds, then returns the run data for all other queries.
   def mount_response(response_hash)
-    @server.mount_proc('/graphql') do |_req, res|
+    org_response = {
+      'data' => {
+        'organizations' => [{ 'id' => 'org_1', 'name' => 'Test Org', 'current' => true }]
+      }
+    }
+
+    @server.mount_proc('/graphql') do |req, res|
+      body = JSON.parse(req.body)
+      result = body['query'].include?('organizations') ? org_response : response_hash
+
       res.status = 200
       res['Content-Type'] = 'application/json'
-      res.body = JSON.generate(response_hash)
+      res.body = JSON.generate(result)
     end
   end
 end

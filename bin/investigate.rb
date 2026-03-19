@@ -3,9 +3,11 @@
 
 require 'json'
 require 'optparse'
+require_relative '../lib/page_comparison'
 
 # Page investigation tool for manual verification
 class PageInvestigator
+  include PageComparison
 
   def initialize(case_dir, yours_pdf, theirs_pdf)
     @case_dir = case_dir
@@ -258,150 +260,6 @@ class PageInvestigator
   end
 
   private
-
-  # Utility methods (inlined to avoid external dependencies)
-
-  def load_page_mapping(mapping_file)
-    if File.exist?(mapping_file)
-      JSON.parse(File.read(mapping_file)).transform_keys(&:to_i)
-    else
-      puts "Warning: No page mapping file found at #{mapping_file}"
-      {}
-    end
-  end
-
-  def logical_to_physical(mapping, logical_page)
-    mapping[logical_page]
-  end
-
-  def find_entry_by_page(toc_entries, logical_page)
-    toc_entries.find { |entry| entry[:pages]&.include?(logical_page) }
-  end
-
-  def extract_page_text_ocr(pdf_path, physical_page, cache_key, cache_dir:, cache:)
-    # Check memory cache
-    return cache[cache_key] if cache.key?(cache_key)
-
-    # Check disk cache
-    Dir.mkdir(cache_dir) unless Dir.exist?(cache_dir)
-    cache_file = "#{cache_dir}/#{cache_key.gsub(':', '_')}.txt"
-
-    if File.exist?(cache_file)
-      text = File.read(cache_file)
-      cache[cache_key] = text
-      return text
-    end
-
-    # Run OCR
-    pdf_name = File.basename(pdf_path, '.*')
-    puts "    OCR: #{pdf_name} page #{physical_page}..."
-    temp_img = "#{cache_dir}/temp_#{cache_key.gsub(':', '_')}.png"
-
-    begin
-      # Convert PDF page to image
-      system("mutool", "draw", "-o", temp_img, "-r", "150", pdf_path, physical_page.to_s, out: File::NULL, err: File::NULL)
-
-      # Run OCR
-      text = `tesseract "#{temp_img}" stdout 2>/dev/null`.force_encoding('UTF-8').scrub('?')
-
-      # Cache the result
-      File.write(cache_file, text)
-      cache[cache_key] = text
-
-      text
-    rescue => e
-      puts "OCR error for #{pdf_path} page #{physical_page}: #{e.message}"
-      ""
-    ensure
-      File.delete(temp_img) if File.exist?(temp_img)
-    end
-  end
-
-  def create_fingerprint(text)
-    normalized = text.downcase.gsub(/\s+/, ' ').strip
-
-    # Extract dates (MM/DD/YYYY or variations)
-    dates = normalized.scan(/\d{1,2}\/\d{1,2}\/\d{2,4}/)
-
-    # Extract potential provider names (words followed by MD, DO, PA, etc.)
-    providers = normalized.scan(/\w+(?:,?\s+(?:md|do|pa|np|dc|dds|phd|psyd))/i)
-
-    # Extract first 200 characters as base fingerprint
-    preview = normalized[0..200] || ""
-
-    # Extract key medical terms
-    medical_terms = normalized.scan(/(?:office visit|x-ray|mri|therapy|report|encounter|consultation|examination|treatment)/)
-
-    {
-      preview: preview,
-      dates: dates.uniq,
-      providers: providers.uniq,
-      medical_terms: medical_terms.uniq,
-      full_text: normalized
-    }
-  end
-
-  def calculate_similarity(fp1, fp2)
-    scores = []
-
-    # Date overlap
-    if !fp1[:dates].empty? && !fp2[:dates].empty?
-      date_overlap = (fp1[:dates] & fp2[:dates]).size.to_f / [fp1[:dates].size, fp2[:dates].size].max
-      scores << date_overlap * 3.0 # Weight dates heavily
-    end
-
-    # Provider overlap
-    if !fp1[:providers].empty? && !fp2[:providers].empty?
-      provider_overlap = (fp1[:providers] & fp2[:providers]).size.to_f / [fp1[:providers].size, fp2[:providers].size].max
-      scores << provider_overlap * 2.0 # Weight providers heavily
-    end
-
-    # Preview text similarity (simple character overlap)
-    preview_similarity = text_overlap(fp1[:preview], fp2[:preview])
-    scores << preview_similarity
-
-    # Medical terms overlap
-    if !fp1[:medical_terms].empty? && !fp2[:medical_terms].empty?
-      terms_overlap = (fp1[:medical_terms] & fp2[:medical_terms]).size.to_f / [fp1[:medical_terms].size, fp2[:medical_terms].size].max
-      scores << terms_overlap
-    end
-
-    # Full text similarity (for final check)
-    full_similarity = text_overlap(fp1[:full_text][0..500], fp2[:full_text][0..500])
-    scores << full_similarity * 2.0
-
-    return 0.0 if scores.empty?
-
-    scores.sum / scores.size
-  end
-
-  def text_overlap(text1, text2)
-    return 0.0 if text1.empty? || text2.empty?
-
-    # Tokenize into words
-    words1 = text1.split
-    words2 = text2.split
-
-    return 0.0 if words1.empty? || words2.empty?
-
-    # Calculate Jaccard similarity
-    intersection = (words1 & words2).size.to_f
-    union = (words1 | words2).size.to_f
-
-    union > 0 ? intersection / union : 0.0
-  end
-
-  def categorize_confidence(score)
-    if score > 0.8
-      "SAME DOCUMENT"
-    elsif score > 0.5
-      "LIKELY SAME"
-    elsif score > 0.3
-      "WEAK MATCH"
-    else
-      "DIFFERENT DOCUMENTS"
-    end
-  end
 
   # Find TOC entry by physical page number (reverse lookup through mapping)
   def find_their_toc_entry_by_physical(physical_page)

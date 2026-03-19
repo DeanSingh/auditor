@@ -21,14 +21,11 @@ class WorkflowInspector
 
     config = AuditorConfig.new
     base = base_url || config.base_url
+    token = config.token!
 
-    org_id = CLIHelpers.resolve_org_id(base_url: base, token: config.token!, name: org_name) if org_name
+    org_id = CLIHelpers.resolve_org_id(base_url: base, token: token, name: org_name) if org_name
 
-    @client = WorkflowClient.new(
-      base_url: base,
-      token: config.token!,
-      org_id: org_id
-    )
+    @client = WorkflowClient.new(base_url: base, token: token, org_id: org_id)
   end
 
   def run
@@ -173,8 +170,9 @@ if __FILE__ == $0
   parser.parse!
 
   workflow_id = nil
+  url_base = nil
   if ARGV.any?
-    workflow_id = CLIHelpers.parse_resource_id(ARGV.first, path_segment: 'workflows')
+    workflow_id, url_base = CLIHelpers.parse_resource_id(ARGV.first, path_segment: 'workflows')
   end
 
   CLIHelpers.run_with_error_handling do
@@ -183,7 +181,7 @@ if __FILE__ == $0
       query: query_filter,
       step_name: step_name,
       output_path: output_path,
-      base_url: base_url,
+      base_url: base_url || url_base,
       org_name: org_name
     )
     inspector.run

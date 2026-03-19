@@ -1,19 +1,21 @@
 # frozen_string_literal: true
 
+require 'yaml'
+
 # Reads Workflow Labs API credentials from environment variables and config file.
 #
 # Priority: environment variables > config file > defaults
 #
 # Config file location: ~/.config/auditor/config
-# Format: INI-style sections with key=value pairs.
+# Format: YAML with environment sections.
 #
-#   [production]
-#   token=abc123
-#   base_url=https://workflow.ing
+#   production:
+#     token: abc123
+#     base_url: https://workflow.ing
 #
-#   [local]
-#   token=xyz789
-#   base_url=http://localhost:3000
+#   local:
+#     token: xyz789
+#     base_url: http://localhost:3000
 #
 # Select environment via --env flag or WORKFLOW_ENV (default: production).
 class AuditorConfig
@@ -66,7 +68,6 @@ class AuditorConfig
 
     check_file_permissions
 
-    require 'yaml'
     data = YAML.load_file(@config_path) || {}
     section = data[@env] || data['production'] || {}
     section.transform_keys(&:to_s)

@@ -375,203 +375,90 @@ class TheirsTOCParser
     while i < lines.length
       line = lines[i].strip
 
-      # Look for date pattern - but only process if it's a real TOC entry (has pages)
       if line.match?(/^(\d{1,2}\/\d{1,2}\/\d{2,4})$/)
-        # Check if this is a real TOC entry or just a date in excerpt text
         unless is_toc_boundary?(lines, i)
-          # Date in excerpt text - skip it
           i += 1
           next
         end
 
-        date_str = line
-        normalized = normalize_date(date_str)
-
-        # Collect page numbers from multiple lines (they may be split)
-        # Example: "208," on one line, "219-221" on next
-        # Scan until boundary (next date, Undated, or EOF)
-        # IMPORTANT: Stop collecting pages after first header line (prevents phone numbers/CPT codes)
-        pages = []
-        pages_lines = []
-        header_lines = []
-        found_header = false  # Track when we've moved past pages into header content
-
-        idx = i + 1
-        while idx < lines.length
-          l = lines[idx].strip
-
-          # Stop at next date or Undated (new entry starts)
-          # But check if it's a real TOC entry (has pages) vs date in excerpt text
-          if is_toc_boundary?(lines, idx)
-            break
-          elsif l.match?(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/)
-            # Date without pages - just excerpt text, treat as header
-            header_lines << l if header_lines.length < 5
-            found_header = true
-            idx += 1
-            next
-          end
-          break if l.match?(/^Undated$/)
-
-          # Skip empty lines
-          if l.empty?
-            idx += 1
-            next
-          end
-
-          # Skip lines that look like dates (contain slashes with digits)
-          # This prevents "01/02/23 to 08/13/23" from being parsed as page "01"
-          if l.match?(/\d+\/\d+/)
-            # This is a date in content, not page numbers - treat as header
-            header_lines << l
-            found_header = true
-            idx += 1
-            next
-          end
-
-          # If line is entirely page numbers AND we haven't seen header yet, collect them
-          # Only match lines that contain ONLY digits, hyphens, commas, and spaces
-          if !found_header && l.match?(/^[\d\-,\s]+$/)
-            pages_lines << l
-          elsif l.match?(/^([\d\-,]+)([A-Z][a-z]+)/)
-            # Handle concatenated case: "235-240Parveen"
-            match = l.match(/^([\d\-,]+)([A-Z].*)/)
-            pages_lines << match[1] unless found_header
-            if header_lines.length < 5
-              header_lines << match[2]
-            end
-            found_header = true
-          else
-            # Line is header text (provider name, etc) - stop collecting pages
-            found_header = true
-            if header_lines.length < 5
-              header_lines << l
-            end
-          end
-
-          idx += 1
-        end
-
-        # Parse all collected page number strings
-        # Join with space to handle split ranges (e.g., "253-" + "257," → "253- 257,")
-        combined_pages = pages_lines.join(" ")
-        pages.concat(parse_page_numbers(combined_pages))
-        # Reject invalid page numbers > 500 (catches CPT codes like 98940, addresses like 811/923)
-        pages = pages.select { |p| p <= 500 }.uniq.sort
-
-        # Only add entry if it has pages (skip invalid date-only entries from index lists)
+        idx, pages, header = collect_entry_content(lines, i)
         unless pages.empty?
-          # Truncate header to reasonable length
-          header = header_lines.join(" ")
-          header = truncate_header(header)
-
-          entries << {
-            date: normalized,
-            date_str: date_str,
-            pages: pages,
-            header: header
-          }
+          entries << { date: normalize_date(line), date_str: line, pages: pages, header: header }
         end
-
-        # Jump to where inner loop stopped to avoid re-scanning consumed lines
-        i = idx - 1  # -1 because loop will do i += 1 at the end
+        i = idx - 1
       elsif line.match?(/^Undated$/)
-        normalized = "UNKNOWN"
-
-        # Scan until boundary (next date, another Undated, or EOF)
-        # IMPORTANT: Stop collecting pages after first header line (prevents phone numbers/CPT codes)
-        pages = []
-        pages_lines = []
-        header_lines = []
-        found_header = false  # Track when we've moved past pages into header content
-
-        idx = i + 1
-        while idx < lines.length
-          l = lines[idx].strip
-
-          # Stop at next date pattern (new entry) - check BEFORE processing
-          # But check if it's a real TOC entry (has pages) vs date in excerpt text
-          if is_toc_boundary?(lines, idx)
-            break
-          elsif l.match?(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/)
-            # Date without pages - just excerpt text, treat as header
-            header_lines << l if header_lines.length < 5
-            found_header = true
-            idx += 1
-            next
-          end
-
-          # Stop at another "Undated" marker (new entry)
-          break if l.match?(/^Undated$/)
-
-          # Skip empty lines
-          if l.empty?
-            idx += 1
-            next
-          end
-
-          # Skip lines that look like dates (contain slashes with digits)
-          # This prevents "01/02/23 to 08/13/23" from being parsed as page "01"
-          if l.match?(/\d+\/\d+/)
-            # This is a date in content, not page numbers - treat as header
-            header_lines << l
-            found_header = true
-            idx += 1
-            next
-          end
-
-          # If line is entirely page numbers AND we haven't seen header yet, collect them
-          # Only match lines that contain ONLY digits, hyphens, commas, and spaces
-          if !found_header && l.match?(/^[\d\-,\s]+$/)
-            pages_lines << l
-          elsif l.match?(/^([\d\-,]+)([A-Z][a-z]+)/)
-            # Handle concatenated case: "235-240Parveen"
-            match = l.match(/^([\d\-,]+)([A-Z].*)/)
-            pages_lines << match[1] unless found_header
-            if header_lines.length < 5
-              header_lines << match[2]
-            end
-            found_header = true
-          else
-            # Line has no page numbers - collect as provider text (stop collecting pages)
-            found_header = true
-            if header_lines.length < 5
-              header_lines << l
-            end
-          end
-
-          idx += 1
-        end
-
-        # Parse all collected page number strings
-        # Join with space to handle split ranges (e.g., "253-" + "257," → "253- 257,")
-        combined_pages = pages_lines.join(" ")
-        pages.concat(parse_page_numbers(combined_pages))
-        # Reject invalid page numbers > 500 (catches CPT codes like 98940, addresses like 811/923)
-        pages = pages.select { |p| p <= 500 }.uniq.sort
-
-        # Only add entry if it has pages (skip invalid entries)
+        idx, pages, header = collect_entry_content(lines, i)
         unless pages.empty?
-          # Truncate header to reasonable length
-          header = header_lines.join(" ")
-          header = truncate_header(header)
-
-          entries << {
-            date: normalized,
-            date_str: "Undated",
-            pages: pages,
-            header: header
-          }
+          entries << { date: "UNKNOWN", date_str: "Undated", pages: pages, header: header }
         end
-
-        # Jump to where inner loop stopped to avoid re-scanning consumed lines
-        i = idx - 1  # -1 because loop will do i += 1 at the end
+        i = idx - 1
       end
 
       i += 1
     end
 
     entries
+  end
+
+  # Collects page numbers and header lines from a TOC entry starting at line index.
+  # Scans forward until the next TOC boundary (date or Undated marker).
+  # Returns [end_index, pages_array, header_string].
+  def self.collect_entry_content(lines, start_idx)
+    pages_lines = []
+    header_lines = []
+    found_header = false
+
+    idx = start_idx + 1
+    while idx < lines.length
+      l = lines[idx].strip
+
+      # Stop at next real TOC entry boundary
+      if is_toc_boundary?(lines, idx)
+        break
+      elsif l.match?(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/)
+        # Date without pages -- just excerpt text, treat as header
+        header_lines << l if header_lines.length < 5
+        found_header = true
+        idx += 1
+        next
+      end
+
+      break if l.match?(/^Undated$/)
+
+      if l.empty?
+        idx += 1
+        next
+      end
+
+      # Lines with slashes and digits are dates in content, not page numbers
+      if l.match?(/\d+\/\d+/)
+        header_lines << l
+        found_header = true
+        idx += 1
+        next
+      end
+
+      if !found_header && l.match?(/^[\d\-,\s]+$/)
+        pages_lines << l
+      elsif l.match?(/^([\d\-,]+)([A-Z][a-z]+)/)
+        # Handle concatenated case: "235-240Parveen"
+        match = l.match(/^([\d\-,]+)([A-Z].*)/)
+        pages_lines << match[1] unless found_header
+        header_lines << match[2] if header_lines.length < 5
+        found_header = true
+      else
+        found_header = true
+        header_lines << l if header_lines.length < 5
+      end
+
+      idx += 1
+    end
+
+    combined_pages = pages_lines.join(" ")
+    pages = parse_page_numbers(combined_pages).select { |p| p <= 500 }.uniq.sort
+    header = truncate_header(header_lines.join(" "))
+
+    [idx, pages, header]
   end
 
   private
