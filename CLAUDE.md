@@ -14,12 +14,14 @@ lib/
   config.rb            — Reads credentials from env vars or ~/.config/auditor/config
   workflow_client.rb   — GraphQL HTTP client for Workflow Labs API
   cli_helpers.rb       — Shared CLI utilities (URL parsing, org resolution, error handling)
+  summary_scorer.rb       — Medical Summary quality scoring engine (rubrics + checks)
   page_comparison.rb   — Shared page comparison (fingerprinting, similarity, OCR extraction)
 
 bin/
   download_project.rb    — Fetches project files from Workflow Labs, sets up case directory
   inspect_run.rb         — Inspects a workflow run (summary + drill-down into step executions)
   inspect_workflow.rb    — Lists workflows or shows full workflow detail (steps, prompts, config)
+  score_summaries.rb     — Scores Medical Summary quality for all letters in a run
   run_pipeline.rb        — Orchestrates the full vendor comparison pipeline (phases 1-4)
   simple_reconcile.rb    — TOC parsing and comparison (yours vs theirs)
   page_matcher.rb        — OCR-based page content matching
@@ -28,6 +30,7 @@ bin/
   test_workflow_client.rb     — Unit tests for WorkflowClient (WEBrick fakes)
   test_inspect_run.rb         — Integration tests for inspect_run.rb CLI
   test_inspect_workflow.rb    — Integration tests for inspect_workflow.rb CLI
+  test_score_summaries.rb     — Unit + integration tests for SummaryScorer and score_summaries.rb CLI
   test_toc_parsers.rb         — Tests for TOC parsing logic
 ```
 
@@ -39,6 +42,7 @@ bin/
 - **Run inspection**: Summary mode shows step structure + execution counts. Drill-down mode shows full output/result/prompt for a specific step+iteration.
 - **Iteration filtering**: `--iterations` accepts ranges (`10-25`) or comma-separated lists (`10,13,14,21`). Comma-separated lists fetch the enclosing range from the API and filter client-side.
 - **Workflow inspection**: List mode finds workflows by name. Detail mode shows the full step pipeline with action configs (prompts, iterator settings, code templates).
+- **Summary scoring**: Rule-based quality checks on Medical Summary outputs. Checks header format compliance (per subcategory template), date/provider consistency between header and letter metadata, empty content detection, required section presence, and content length ratios. Supports both document-first and old-pipeline runs. Output is a JSON scorecard with per-letter pass/fail and aggregate stats.
 
 ## Record Review Workflows
 
@@ -64,6 +68,7 @@ The CLI auto-detects the workflow type based on whether the run has a `document`
 ruby bin/test_workflow_client.rb
 ruby bin/test_inspect_run.rb
 ruby bin/test_inspect_workflow.rb
+ruby bin/test_score_summaries.rb
 ruby bin/test_toc_parsers.rb
 
 # List workflows / inspect a workflow
@@ -87,6 +92,11 @@ bin/inspect_run.rb <run_id> --step "Extract Info" --fields date,thoughts  # Sele
 bin/inspect_run.rb <run_id> --letters                                     # Letter details (batch runs)
 bin/inspect_run.rb <run_id> --pages                                       # Page metadata (batch runs)
 bin/inspect_run.rb <run_id> -o /tmp/run.json                              # Save to file
+
+# Score Medical Summary quality for a run
+bin/score_summaries.rb <run_id>                           # Full scorecard (JSON)
+bin/score_summaries.rb <run_id> --compact                  # Summary + flagged letters only
+bin/score_summaries.rb <run_id> -o /tmp/scores.json        # Save to file
 
 # Run full vendor comparison pipeline
 bin/run_pipeline.rb --case "LastName_FirstName" <yours.docx> <theirs.pdf>

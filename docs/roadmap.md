@@ -29,6 +29,7 @@ Working alpha. The audit skill can list/inspect workflows, download project file
 ## In Progress
 
 - [ ] Valencia_Tiffany re-run (project 53, run 8564) — Letters Loop re-running with Medical Summary DOI prompt fix. Build Letters sort fix verified. ~8.5 hours, running overnight. After completion: verify DOI dates resolved, no regressions.
+- [ ] Medical Summary scoring — rule-based quality checks (header format, date/provider consistency, section presence, content length) via `bin/score_summaries.rb`. Tier 1 of a two-tier system (Tier 2: LLM-as-judge for flagged letters, planned).
 
 ## Up Next
 
