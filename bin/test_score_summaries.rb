@@ -239,3 +239,134 @@ class TestSummaryScorerChecks < Minitest::Test
     assert_empty issues
   end
 end
+
+class TestSummaryScorerEngine < Minitest::Test
+  def setup
+    @server = WEBrick::HTTPServer.new(
+      Port: 0,
+      Logger: WEBrick::Log.new('/dev/null'),
+      AccessLog: []
+    )
+    @port = @server[:Port]
+    @base_url = "http://127.0.0.1:#{@port}"
+    @server_thread = Thread.new { @server.start }
+  end
+
+  def teardown
+    @server.shutdown
+    @server_thread.join(2)
+  end
+
+  def test_score_document_first_run
+    mount_scoring_responses(
+      run_summary: {
+        'id' => '100', 'status' => 'SUCCEEDED',
+        'document' => { 'lettersCount' => 2, 'sourcePages' => { 'count' => 10 } },
+        'documentable' => true,
+        'workflow' => { 'name' => 'Record Review', 'steps' => [] },
+        'executions' => [], 'stats' => {}
+      },
+      letters: [
+        { 'id' => '1', 'index' => 0, 'date' => 'January 15, 2021',
+          'provider' => 'J Smith, PhD', 'category' => ['Psych Records'],
+          'subcategory' => ['Reports by Psychologists, Psychiatrists, Neuropsychologists'],
+          'pageCount' => 3, 'pages' => [{ 'pageNumber' => 1 }, { 'pageNumber' => 2 }, { 'pageNumber' => 3 }],
+          'content' => "# [January 15, 2021, Medical Report - J Smith, PhD]{.underline}\n\n**Subjective:**\nPatient reports ongoing anxiety.\n\n**Assessment:**\nGAD with moderate severity." },
+        { 'id' => '2', 'index' => 1, 'date' => 'March 10, 2021',
+          'provider' => 'R Johnson, MD', 'category' => ['Medical Records'],
+          'subcategory' => ['Progress Notes and Reports by Treating Physicians'],
+          'pageCount' => 2, 'pages' => [{ 'pageNumber' => 4 }, { 'pageNumber' => 5 }],
+          'content' => '' }
+      ]
+    )
+
+    client = WorkflowClient.new(base_url: @base_url, token: 'test', org_id: 'org_1')
+    scorer = SummaryScorer.new(client: client)
+    result = scorer.score('100')
+
+    assert_equal '100', result['run_id']
+    assert_equal 2, result['letters_scored']
+
+    letter1 = result['letters'].find { |l| l['index'] == 0 }
+    assert letter1['passed'], "Letter 1 should pass: #{letter1['issues']}"
+
+    letter2 = result['letters'].find { |l| l['index'] == 1 }
+    refute letter2['passed'], 'Letter 2 should fail (empty content)'
+    assert letter2['issues'].any? { |i| i['check'] == 'empty_content' }
+
+    assert_equal 1, result['summary']['flagged']
+  end
+
+  def test_score_old_pipeline_run
+    mount_scoring_responses(
+      run_summary: {
+        'id' => '200', 'status' => 'SUCCEEDED',
+        'workflow' => { 'name' => 'Record Review', 'steps' => [
+          { 'id' => '1', 'name' => 'Medical Summary', 'kind' => 'PROMPT', 'priority' => 1,
+            'action' => { '__typename' => 'Action__Prompt', 'messages' => [] } }
+        ] },
+        'executions' => [
+          { 'id' => '1', 'status' => 'SUCCEEDED', 'step' => { 'name' => 'Medical Summary' } }
+        ],
+        'stats' => {}
+      },
+      medical_summary_executions: [
+        { 'iteration' => 0, 'status' => 'SUCCEEDED',
+          'output' => "<content>\n# [February 1, 2021, Medical Report - A Lee, MD]{.underline}\n\n**Subjective:**\nBack pain.\n\n**Assessment:**\nLumbar strain.\n</content>",
+          'result' => nil,
+          'prompt' => "Date: February 1, 2021\nProvider: A Lee, MD\nPages category and sub-category:\n- Page: 1\n- Category: Medical Records\n- Sub-category: Progress Notes and Reports by Treating Physicians\nPages in document: 2\n<processed_content>Content here</processed_content>",
+          'step' => { 'name' => 'Medical Summary' },
+          'started' => nil, 'finished' => nil }
+      ]
+    )
+
+    client = WorkflowClient.new(base_url: @base_url, token: 'test', org_id: 'org_1')
+    scorer = SummaryScorer.new(client: client)
+    result = scorer.score('200')
+
+    assert_equal '200', result['run_id']
+    assert_equal 1, result['letters_scored']
+
+    letter = result['letters'].first
+    assert_equal 'February 1, 2021', letter['date']
+    assert_equal 'A Lee, MD', letter['provider']
+    assert letter['passed']
+  end
+
+  private
+
+  def mount_scoring_responses(run_summary:, letters: nil, medical_summary_executions: nil)
+    org_response = {
+      'data' => { 'organizations' => [{ 'id' => 'org_1', 'name' => 'Test Org', 'current' => true }] }
+    }
+
+    summary_response = { 'data' => { 'run' => run_summary } }
+
+    letters_response = if letters
+      { 'data' => { 'run' => { 'document' => { 'lettersCount' => letters.length, 'letters' => letters } } } }
+    end
+
+    executions_response = if medical_summary_executions
+      { 'data' => { 'run' => { 'executions' => medical_summary_executions } } }
+    end
+
+    @server.mount_proc('/graphql') do |req, res|
+      body = JSON.parse(req.body)
+      query = body['query']
+
+      result = if query.include?('organizations')
+        org_response
+      elsif query.include?('content') && letters_response
+        letters_response
+      elsif query.include?('ExecutionFilterInput') && executions_response
+        executions_response
+      else
+        summary_response
+      end
+
+      res.status = 200
+      res['Content-Type'] = 'application/json'
+      res.body = JSON.generate(result)
+    end
+  end
+end

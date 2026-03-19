@@ -240,7 +240,7 @@ class SummaryScorer
     end
   end
 
-  CHARS_PER_PAGE_THRESHOLD = 50
+  CHARS_PER_PAGE_THRESHOLD = 20
 
   def self.check_content_length(content, page_count)
     return [] if page_count.to_i <= 2
@@ -253,5 +253,137 @@ class SummaryScorer
     else
       []
     end
+  end
+
+  def initialize(client:)
+    @client = client
+  end
+
+  def score(run_id)
+    summary = @client.fetch_run_summary(run_id)
+    raise "Run #{run_id} not found" if summary.nil?
+
+    unless summary['status'] == 'SUCCEEDED'
+      warn "Warning: Run #{run_id} status is #{summary['status']} — results may be incomplete"
+    end
+
+    letters = if document_first?(summary)
+      fetch_document_first_letters(run_id)
+    else
+      fetch_old_pipeline_letters(run_id)
+    end
+
+    scored = letters.map { |letter| score_letter(letter) }
+
+    build_scorecard(run_id, scored)
+  end
+
+  private
+
+  def document_first?(data)
+    data['documentable'] == true || data['document'].is_a?(Hash)
+  end
+
+  def fetch_document_first_letters(run_id)
+    letters = @client.fetch_run_document_letters_with_content(run_id) || []
+    letters.map do |l|
+      {
+        'index' => l['index'],
+        'date' => l['date'],
+        'provider' => l['provider'],
+        'subcategory' => l['subcategory'],
+        'category' => l['category'],
+        'pageCount' => l['pageCount'],
+        'content' => l['content']
+      }
+    end
+  end
+
+  def fetch_old_pipeline_letters(run_id)
+    data = @client.fetch_run_executions(run_id, step_name: 'Medical Summary')
+    executions = (data&.dig('executions') || []).select { |e| e['status'] == 'SUCCEEDED' }
+
+    executions.map do |e|
+      prompt = e['prompt'] || ''
+      output = e['output'] || ''
+
+      content_match = output.match(%r{<content>(.*?)</content>}m)
+      content = content_match ? content_match[1].strip : output
+
+      date = prompt.match(/^Date:\s*([^\n]+)/)&.[](1)&.strip
+      provider = prompt.match(/^Provider:\s*([^\n]+)/)&.[](1)&.strip
+      subcategories = prompt.scan(/Sub-category:\s*(.+)/).flatten.map(&:strip).uniq
+      page_count_match = prompt.match(/Pages in document:\s*(\d+)/m)
+      page_count = page_count_match ? page_count_match[1].to_i : 1
+
+      {
+        'index' => e['iteration'],
+        'date' => date,
+        'provider' => provider,
+        'subcategory' => subcategories,
+        'category' => [],
+        'pageCount' => page_count,
+        'content' => content
+      }
+    end
+  end
+
+  def score_letter(letter)
+    content = letter['content'] || ''
+    subcategory = letter['subcategory']
+    rubric = self.class.rubric_for(subcategory)
+
+    issues = []
+    issues.concat(self.class.check_header_format(content, rubric[:header_shape]))
+    issues.concat(self.class.check_date_consistency(content, letter['date']))
+    issues.concat(self.class.check_provider_consistency(content, letter['provider']))
+    issues.concat(self.class.check_empty_content(content, letter['pageCount']))
+    issues.concat(self.class.check_required_sections(content, rubric[:required_sections]))
+    issues.concat(self.class.check_content_length(content, letter['pageCount']))
+
+    {
+      'index' => letter['index'],
+      'date' => letter['date'],
+      'provider' => letter['provider'],
+      'subcategory' => Array(subcategory).first || 'Unknown',
+      'page_count' => letter['pageCount'],
+      'issues' => issues.map { |i| { 'check' => i[:check], 'severity' => i[:severity], 'message' => i[:message] } },
+      'passed' => issues.none? { |i| i[:severity] == 'error' },
+      'warnings' => issues.count { |i| i[:severity] == 'warning' },
+      'errors' => issues.count { |i| i[:severity] == 'error' }
+    }
+  end
+
+  def build_scorecard(run_id, scored_letters)
+    checks = Hash.new { |h, k| h[k] = { 'passed' => 0, 'failed' => 0 } }
+
+    scored_letters.each do |letter|
+      failed_checks = letter['issues'].map { |i| i['check'] }.uniq
+      all_checks = %w[header_format date_consistency provider_consistency empty_content required_sections content_length]
+
+      all_checks.each do |check|
+        if failed_checks.include?(check)
+          checks[check]['failed'] += 1
+        else
+          checks[check]['passed'] += 1
+        end
+      end
+    end
+
+    flagged = scored_letters.reject { |l| l['passed'] && l['warnings'].zero? }
+
+    {
+      'run_id' => run_id,
+      'letters_scored' => scored_letters.length,
+      'summary' => {
+        'passed' => scored_letters.count { |l| l['passed'] && l['warnings'].zero? },
+        'flagged' => flagged.length,
+        'errors' => scored_letters.sum { |l| l['errors'] },
+        'warnings' => scored_letters.sum { |l| l['warnings'] },
+        'checks' => checks
+      },
+      'flagged_letters' => flagged,
+      'letters' => scored_letters
+    }
   end
 end
