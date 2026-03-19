@@ -179,6 +179,21 @@ class TestSummaryScorerChecks < Minitest::Test
     assert_empty issues
   end
 
+  def test_provider_consistency_multi_dash_header
+    # Operative/letter/emergency headers have: Report - Provider - Facility
+    # Provider is the second segment, not the facility
+    content = "# [November 12, 2021, Operative Report - D Brown, MD - Cedar Sinai Los Angeles]{.underline}\n\nContent."
+    issues = SummaryScorer.check_provider_consistency(content, 'D Brown, MD')
+    assert_empty issues, "Should match provider in multi-dash header, not facility: #{issues}"
+  end
+
+  def test_provider_consistency_lab_header
+    # Lab headers have: Report - Provider - Lab name
+    content = "# [June 1, 2021, Laboratory Report - Quest Diagnostics - Main Lab]{.underline}\n\nContent."
+    issues = SummaryScorer.check_provider_consistency(content, 'Quest Diagnostics')
+    assert_empty issues
+  end
+
   # --- check_empty_content ---
   def test_empty_content_multi_page_flagged
     issues = SummaryScorer.check_empty_content('', 3)

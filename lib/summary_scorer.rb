@@ -114,6 +114,7 @@ class SummaryScorer
     'EMG' => 'Diagnostic Studies (NCS Studies)',
     'Lab' => 'Laboratory Report',
     'Pathology' => 'Pathology Report',
+    'RFA' => 'Request for Authorization',
     'Cover Letter' => 'Cover Letters and Position Statements',
     'Deposition' => 'Depositions'
   }.freeze
@@ -144,10 +145,21 @@ class SummaryScorer
 
   def self.parse_header_provider(header)
     return nil if header.nil?
-    match = header.match(/- ([^-\]]+)\]\{\.underline\}/i)
-    return match[1].strip if match
+
+    # Extract content between brackets: [Date, Report - Provider - Facility]{.underline}
+    bracket_match = header.match(/\[(.+)\]\{\.underline\}/i)
+    if bracket_match
+      # Split on " - " to get segments: ["Date, Report", "Provider", "Facility"]
+      segments = bracket_match[1].split(' - ')
+      # Provider is the second segment (index 1) for multi-dash headers,
+      # or the last segment for single-dash headers like [Date, Report - Provider]
+      return segments[1].strip if segments.length >= 2
+    end
+
+    # Cover letter: Cover Letter - Attorney to Recipient
     match = header.match(/Cover Letter - (.+)$/i)
     return match[1].strip if match
+
     nil
   end
 
