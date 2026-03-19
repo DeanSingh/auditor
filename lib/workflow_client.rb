@@ -164,6 +164,29 @@ class WorkflowClient
     }
   GRAPHQL
 
+  RUN_DOCUMENT_LETTERS_WITH_CONTENT_QUERY = <<~GRAPHQL
+    query InspectRunDocumentLettersWithContent($id: ID!) {
+      run(id: $id) {
+        document {
+          ... on RecordReview {
+            lettersCount
+            letters {
+              id
+              index
+              date
+              provider
+              category
+              subcategory
+              pageCount
+              pages { pageNumber }
+              content
+            }
+          }
+        }
+      }
+    }
+  GRAPHQL
+
   RUN_EXECUTIONS_QUERY = <<~GRAPHQL
     query InspectRunExecutions($id: ID!, $filter: ExecutionFilterInput) {
       run(id: $id) {
@@ -218,6 +241,11 @@ class WorkflowClient
   # Fetches document letters for a run via the RunDocument union type.
   def fetch_run_document_letters(run_id)
     graphql(RUN_DOCUMENT_LETTERS_QUERY, %w[run document letters], id: run_id)
+  end
+
+  # Fetches document letters with full content for scoring.
+  def fetch_run_document_letters_with_content(run_id)
+    graphql(RUN_DOCUMENT_LETTERS_WITH_CONTENT_QUERY, %w[run document letters], id: run_id)
   end
 
   # Fetches workflows, optionally filtered by search query.
