@@ -154,8 +154,8 @@ class SummaryScorer
   # --- Scoring Checks ---
   # Each returns an array of issue hashes: { check:, severity:, message: }
 
-  def self.check_header_format(content, header_shape)
-    header = extract_header(content)
+  def self.check_header_format(content, header_shape, header: nil)
+    header ||= extract_header(content)
     return [] if header.nil?
     issues = []
     if header_shape == :cover_letter
@@ -180,9 +180,9 @@ class SummaryScorer
     issues
   end
 
-  def self.check_date_consistency(content, expected_date)
+  def self.check_date_consistency(content, expected_date, header: nil)
     return [] if expected_date.nil? || expected_date.strip.empty?
-    header = extract_header(content)
+    header ||= extract_header(content)
     return [] if header.nil?
     header_date = parse_header_date(header)
     return [] if header_date.nil?
@@ -195,9 +195,9 @@ class SummaryScorer
     end
   end
 
-  def self.check_provider_consistency(content, expected_provider)
+  def self.check_provider_consistency(content, expected_provider, header: nil)
     return [] if expected_provider.nil? || expected_provider.strip.empty?
-    header = extract_header(content)
+    header ||= extract_header(content)
     return [] if header.nil?
     header_provider = parse_header_provider(header)
     return [] if header_provider.nil?
@@ -227,10 +227,10 @@ class SummaryScorer
     end
   end
 
-  def self.check_required_sections(content, required_sections)
+  def self.check_required_sections(content, required_sections, body: nil)
     return [] if required_sections.empty?
     return [] if content.nil? || content.strip.empty?
-    body = content.lines.drop(1).join
+    body ||= content.lines.drop(1).join
     missing = required_sections.reject { |section| body.match?(/#{Regexp.escape(section)}/i) }
     if missing.any?
       [{ check: 'required_sections', severity: 'warning',
@@ -240,12 +240,14 @@ class SummaryScorer
     end
   end
 
+  CHECK_NAMES = %w[header_format date_consistency provider_consistency empty_content required_sections content_length].freeze
+
   CHARS_PER_PAGE_THRESHOLD = 20
 
-  def self.check_content_length(content, page_count)
+  def self.check_content_length(content, page_count, body: nil)
     return [] if page_count.to_i <= 2
     return [] if content.nil? || content.strip.empty? # Empty handled by check_empty_content
-    body = content.lines.drop(1).join.strip
+    body = (body || content.lines.drop(1).join).strip
     expected_min = page_count.to_i * CHARS_PER_PAGE_THRESHOLD
     if body.length < expected_min
       [{ check: 'content_length', severity: 'warning',
@@ -285,18 +287,7 @@ class SummaryScorer
   end
 
   def fetch_document_first_letters(run_id)
-    letters = @client.fetch_run_document_letters_with_content(run_id) || []
-    letters.map do |l|
-      {
-        'index' => l['index'],
-        'date' => l['date'],
-        'provider' => l['provider'],
-        'subcategory' => l['subcategory'],
-        'category' => l['category'],
-        'pageCount' => l['pageCount'],
-        'content' => l['content']
-      }
-    end
+    @client.fetch_run_document_letters_with_content(run_id) || []
   end
 
   def fetch_old_pipeline_letters(run_id)
@@ -333,13 +324,17 @@ class SummaryScorer
     subcategory = letter['subcategory']
     rubric = self.class.rubric_for(subcategory)
 
+    # Pre-compute header and body once to avoid redundant parsing across checks
+    header = self.class.extract_header(content)
+    body = content.lines.drop(1).join unless content.strip.empty?
+
     issues = []
-    issues.concat(self.class.check_header_format(content, rubric[:header_shape]))
-    issues.concat(self.class.check_date_consistency(content, letter['date']))
-    issues.concat(self.class.check_provider_consistency(content, letter['provider']))
+    issues.concat(self.class.check_header_format(content, rubric[:header_shape], header: header))
+    issues.concat(self.class.check_date_consistency(content, letter['date'], header: header))
+    issues.concat(self.class.check_provider_consistency(content, letter['provider'], header: header))
     issues.concat(self.class.check_empty_content(content, letter['pageCount']))
-    issues.concat(self.class.check_required_sections(content, rubric[:required_sections]))
-    issues.concat(self.class.check_content_length(content, letter['pageCount']))
+    issues.concat(self.class.check_required_sections(content, rubric[:required_sections], body: body))
+    issues.concat(self.class.check_content_length(content, letter['pageCount'], body: body))
 
     {
       'index' => letter['index'],
@@ -359,9 +354,8 @@ class SummaryScorer
 
     scored_letters.each do |letter|
       failed_checks = letter['issues'].map { |i| i['check'] }.uniq
-      all_checks = %w[header_format date_consistency provider_consistency empty_content required_sections content_length]
 
-      all_checks.each do |check|
+      CHECK_NAMES.each do |check|
         if failed_checks.include?(check)
           checks[check]['failed'] += 1
         else
