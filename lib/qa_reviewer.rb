@@ -258,10 +258,15 @@ class QAReviewer
     match ? match[1].strip : nil
   end
 
-  # Parses JSON result string, returning nil on failure.
-  def self.parse_result(result_str)
-    return nil if result_str.nil? || result_str.strip.empty?
-    JSON.parse(result_str)
+  # Parses result — may be a JSON string or already a Hash.
+  def self.parse_result(result)
+    return nil if result.nil?
+    return result if result.is_a?(Hash)
+
+    str = result.to_s.strip
+    return nil if str.empty?
+
+    JSON.parse(str)
   rescue JSON::ParserError
     nil
   end
