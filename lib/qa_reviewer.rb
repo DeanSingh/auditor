@@ -153,15 +153,75 @@ class QAReviewer
   end
 
   # Checks for redundant/duplicate content between letters.
-  # Stub — returns empty hash until implemented.
-  def self.check_redundancy(_letters)
-    {}
+  def self.check_redundancy(letters)
+    findings = {}
+    return findings if letters.length < 2
+
+    letters.each_with_index do |letter_a, i|
+      ((i + 1)...letters.length).each do |j|
+        letter_b = letters[j]
+
+        pages_a = Set.new((letter_a['pages'] || []).map { |p| p['pageNumber'] })
+        pages_b = Set.new((letter_b['pages'] || []).map { |p| p['pageNumber'] })
+        overlapping = !(pages_a & pages_b).empty?
+
+        content_a = letter_a['content'] || ''
+        content_b = letter_b['content'] || ''
+        similar = content_a.length > 50 && content_b.length > 50 &&
+                  cosine_similarity(content_a, content_b) > REDUNDANCY_THRESHOLD
+
+        next unless overlapping || similar
+
+        pages_b_str = format_page_range(pages_b.to_a.sort)
+        pages_a_str = format_page_range(pages_a.to_a.sort)
+        provider_b = letter_b['provider'] || 'Unknown'
+        provider_a = letter_a['provider'] || 'Unknown'
+
+        findings[i] ||= []
+        findings[i] << { check: 'redundancy', severity: 'warning',
+                         message: "Similar to letter at pages #{pages_b_str} (#{provider_b})" }
+        findings[j] ||= []
+        findings[j] << { check: 'redundancy', severity: 'warning',
+                         message: "Similar to letter at pages #{pages_a_str} (#{provider_a})" }
+      end
+    end
+
+    findings
+  end
+
+  def self.cosine_similarity(text_a, text_b)
+    words_a = text_a.downcase.scan(/\w+/).tally
+    words_b = text_b.downcase.scan(/\w+/).tally
+
+    all_words = words_a.keys | words_b.keys
+    return 0.0 if all_words.empty?
+
+    dot = all_words.sum { |w| (words_a[w] || 0) * (words_b[w] || 0) }
+    mag_a = Math.sqrt(words_a.values.sum { |v| v * v })
+    mag_b = Math.sqrt(words_b.values.sum { |v| v * v })
+
+    return 0.0 if mag_a.zero? || mag_b.zero?
+
+    dot.to_f / (mag_a * mag_b)
   end
 
   # Checks provider availability claims against source data.
-  # Stub — returns empty array until implemented.
-  def self.check_provider_availability(_letter, _extracts)
-    []
+  def self.check_provider_availability(letter, page_extracts)
+    provider = letter['provider']
+    return [] unless provider.nil? || provider.strip.empty? || provider.strip.downcase == 'unknown'
+
+    has_provider_in_source = page_extracts.any? do |extract|
+      result = parse_result(extract['result'])
+      next false unless result
+
+      p = result['provider']
+      p && !p.strip.empty? && p.strip.downcase != 'unknown'
+    end
+
+    return [] if has_provider_in_source
+
+    [{ check: 'provider_availability', severity: 'info',
+       message: 'No provider name available for review' }]
   end
 
   # --- Helper methods ---

@@ -142,3 +142,94 @@ class TestQAReviewerContentCoverage < Minitest::Test
     }
   end
 end
+
+class TestQAReviewerProviderAvailability < Minitest::Test
+  def test_unknown_provider_no_source_provider_flags_info
+    letter = { 'provider' => 'Unknown', 'pages' => [{ 'pageNumber' => 1 }], 'content' => 'x' }
+    extracts = [make_extract(0, provider: 'Unknown')]
+    issues = QAReviewer.check_provider_availability(letter, extracts)
+    assert_equal 1, issues.length
+    assert_equal 'provider_availability', issues[0][:check]
+    assert_equal 'info', issues[0][:severity]
+    assert_includes issues[0][:message], 'No provider name'
+  end
+
+  def test_unknown_provider_but_source_has_provider_no_flag
+    letter = { 'provider' => 'Unknown', 'pages' => [{ 'pageNumber' => 1 }], 'content' => 'x' }
+    extracts = [make_extract(0, provider: 'Dr. J Smith')]
+    issues = QAReviewer.check_provider_availability(letter, extracts)
+    assert_empty issues
+  end
+
+  def test_nil_provider_no_source_flags_info
+    letter = { 'provider' => nil, 'pages' => [{ 'pageNumber' => 1 }], 'content' => 'x' }
+    extracts = [make_extract(0, provider: nil)]
+    issues = QAReviewer.check_provider_availability(letter, extracts)
+    assert_equal 1, issues.length
+    assert_equal 'info', issues[0][:severity]
+  end
+
+  def test_valid_provider_no_flag
+    letter = { 'provider' => 'J Smith, MD', 'pages' => [{ 'pageNumber' => 1 }], 'content' => 'x' }
+    extracts = [make_extract(0, provider: 'J Smith, MD')]
+    issues = QAReviewer.check_provider_availability(letter, extracts)
+    assert_empty issues
+  end
+
+  private
+
+  def make_extract(iteration, provider: 'Unknown')
+    {
+      'iteration' => iteration,
+      'status' => 'SUCCEEDED',
+      'result' => JSON.generate({ 'date' => 'January 15, 2021', 'provider' => provider }),
+      'prompt' => '', 'output' => '',
+      'step' => { 'name' => 'Extract Info' }
+    }
+  end
+end
+
+class TestQAReviewerRedundancy < Minitest::Test
+  def test_overlapping_pages_flags_both
+    letters = [
+      { 'index' => 0, 'pages' => [{ 'pageNumber' => 1 }, { 'pageNumber' => 2 }, { 'pageNumber' => 3 }],
+        'provider' => 'A', 'content' => 'Unique content about anxiety disorder treatment plan.' },
+      { 'index' => 1, 'pages' => [{ 'pageNumber' => 2 }, { 'pageNumber' => 3 }, { 'pageNumber' => 4 }],
+        'provider' => 'B', 'content' => 'Different content about back pain management.' }
+    ]
+    findings = QAReviewer.check_redundancy(letters)
+    assert findings.key?(0), "Letter 0 should be flagged"
+    assert findings.key?(1), "Letter 1 should be flagged"
+    assert_equal 'redundancy', findings[0].first[:check]
+  end
+
+  def test_no_overlap_different_content_no_flag
+    letters = [
+      { 'index' => 0, 'pages' => [{ 'pageNumber' => 1 }, { 'pageNumber' => 2 }],
+        'provider' => 'A', 'content' => 'Unique content about anxiety disorder treatment plan and medications.' },
+      { 'index' => 1, 'pages' => [{ 'pageNumber' => 5 }, { 'pageNumber' => 6 }],
+        'provider' => 'B', 'content' => 'Completely different content about orthopedic surgery and recovery.' }
+    ]
+    findings = QAReviewer.check_redundancy(letters)
+    assert_empty findings
+  end
+
+  def test_high_similarity_no_page_overlap_flags_both
+    shared = "Patient presents with chronic low back pain radiating to left lower extremity. " * 10
+    letters = [
+      { 'index' => 0, 'pages' => [{ 'pageNumber' => 1 }], 'provider' => 'A', 'content' => shared },
+      { 'index' => 1, 'pages' => [{ 'pageNumber' => 5 }], 'provider' => 'B', 'content' => shared }
+    ]
+    findings = QAReviewer.check_redundancy(letters)
+    assert findings.key?(0)
+    assert findings.key?(1)
+  end
+
+  def test_single_letter_no_flag
+    letters = [
+      { 'index' => 0, 'pages' => [{ 'pageNumber' => 1 }], 'provider' => 'A', 'content' => 'Content' }
+    ]
+    findings = QAReviewer.check_redundancy(letters)
+    assert_empty findings
+  end
+end
