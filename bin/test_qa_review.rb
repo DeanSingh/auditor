@@ -5,6 +5,8 @@ ENV['MT_NO_PLUGINS'] = '1'
 
 require 'minitest/autorun'
 require 'json'
+require 'webrick'
+require 'open3'
 require_relative '../lib/workflow_client'
 require_relative '../lib/qa_reviewer'
 
@@ -231,5 +233,141 @@ class TestQAReviewerRedundancy < Minitest::Test
     ]
     findings = QAReviewer.check_redundancy(letters)
     assert_empty findings
+  end
+end
+
+class TestQAReviewCLI < Minitest::Test
+  def setup
+    @server = WEBrick::HTTPServer.new(
+      Port: 0,
+      Logger: WEBrick::Log.new('/dev/null'),
+      AccessLog: []
+    )
+    @port = @server[:Port]
+    @base_url = "http://127.0.0.1:#{@port}"
+    @server_thread = Thread.new { @server.start }
+    @script = File.expand_path('../qa_review.rb', __FILE__)
+  end
+
+  def teardown
+    @server.shutdown
+    @server_thread.join(2)
+  end
+
+  def test_cli_outputs_json
+    mount_cli_responses
+    out, status = run_script('100', '--base-url', @base_url)
+    assert status.success?, "Script failed: #{out}"
+
+    result = JSON.parse(out)
+    assert_equal '100', result['run_id']
+    assert result.key?('letters_reviewed')
+    assert result.key?('summary')
+    assert result.key?('findings')
+  end
+
+  def test_cli_compact_mode
+    mount_cli_responses
+    out, status = run_script('100', '--compact', '--base-url', @base_url)
+    assert status.success?, "Script failed: #{out}"
+
+    result = JSON.parse(out)
+    refute result.key?('findings'), 'Compact mode should omit full findings list'
+    assert result.key?('flagged_findings')
+  end
+
+  def test_cli_csv_format
+    mount_cli_responses
+    out, status = run_script('100', '--format', 'csv', '--base-url', @base_url)
+    assert status.success?, "Script failed: #{out}"
+
+    lines = out.strip.split("\n")
+    assert_equal 'Provider,Pages,Category,DOS,Issues / Notes,Status,Time (min)', lines.first
+  end
+
+  def test_cli_exits_with_error_when_no_args
+    out, status = run_script('--base-url', @base_url)
+    refute status.success?
+    assert_includes out, 'run_id is required'
+  end
+
+  private
+
+  def run_script(*args)
+    env = { 'WORKFLOW_API_TOKEN' => 'test_token' }
+    stdout_and_stderr, status = Open3.capture2e(env, 'ruby', @script, *args)
+    [stdout_and_stderr, status]
+  end
+
+  def mount_cli_responses
+    org_response = {
+      'data' => { 'organizations' => [{ 'id' => 'org_1', 'name' => 'Test Org', 'current' => true }] }
+    }
+
+    summary_response = {
+      'data' => {
+        'run' => {
+          'id' => '100', 'status' => 'SUCCEEDED',
+          'document' => { 'lettersCount' => 1, 'sourcePages' => { 'count' => 3 } },
+          'documentable' => true,
+          'workflow' => { 'name' => 'Record Review', 'steps' => [
+            { 'id' => '1', 'name' => 'Extract Info', 'kind' => 'PROMPT', 'priority' => 1 }
+          ] },
+          'executions' => [], 'stats' => {}
+        }
+      }
+    }
+
+    letters_response = {
+      'data' => {
+        'run' => {
+          'document' => {
+            'lettersCount' => 1,
+            'letters' => [{
+              'id' => '1', 'index' => 0, 'date' => 'January 15, 2021',
+              'provider' => 'J Smith, PhD',
+              'category' => ['Psych Records'],
+              'subcategory' => ['Reports by Psychologists'],
+              'pageCount' => 1,
+              'pages' => [{ 'pageNumber' => 1 }],
+              'content' => "# Header\n\nSummary content here."
+            }]
+          }
+        }
+      }
+    }
+
+    extract_info_response = {
+      'data' => {
+        'run' => {
+          'executions' => [{
+            'iteration' => 0, 'status' => 'SUCCEEDED',
+            'result' => JSON.generate({ 'date' => 'January 15, 2021', 'provider' => 'J Smith, PhD' }),
+            'prompt' => '<processed_content>Page text</processed_content>',
+            'output' => '', 'step' => { 'name' => 'Extract Info' },
+            'started' => nil, 'finished' => nil
+          }]
+        }
+      }
+    }
+
+    @server.mount_proc('/graphql') do |req, res|
+      body = JSON.parse(req.body)
+      query = body['query']
+
+      result = if query.include?('organizations')
+        org_response
+      elsif query.include?('ExecutionFilterInput')
+        extract_info_response
+      elsif query.include?('content')
+        letters_response
+      else
+        summary_response
+      end
+
+      res.status = 200
+      res['Content-Type'] = 'application/json'
+      res.body = JSON.generate(result)
+    end
   end
 end

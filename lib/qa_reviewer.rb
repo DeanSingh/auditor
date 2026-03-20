@@ -435,6 +435,7 @@ class QAReviewer
         'warnings' => findings.sum { |f| f['warnings'] },
         'checks' => count_by_check(findings)
       },
+      'flagged_findings' => findings,
       'findings' => findings,
       'timing_seconds' => timing
     }
