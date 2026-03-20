@@ -28,13 +28,13 @@ class TestQAReviewerDOS < Minitest::Test
     assert_includes issues[0][:message], 'January 15, 2021'
   end
 
-  def test_dos_unknown_but_source_has_dos_flags_warning
+  def test_dos_unknown_but_source_has_dos_flags_error
     letter = { 'date' => 'Unknown', 'pages' => [{ 'pageNumber' => 1 }], 'content' => 'x' }
     prompt = "<processed_content>\nDate of Service: 01/15/2021\nPatient seen for follow-up.\n</processed_content>"
     extracts = [make_extract(0, date: 'Unknown', prompt: prompt)]
     issues = QAReviewer.check_dos(letter, extracts)
     assert_equal 1, issues.length
-    assert_equal 'warning', issues[0][:severity]
+    assert_equal 'error', issues[0][:severity]
     assert_includes issues[0][:message], 'unknown date'
   end
 

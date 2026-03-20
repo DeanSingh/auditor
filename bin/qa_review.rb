@@ -28,17 +28,17 @@ class QAReviewCLI
     @compact = compact
     @format = format
 
-    config = AuditorConfig.new(env: env)
+    config = AuditorConfig.new(env:)
     base = base_url || config.base_url
     token = config.token!
 
     org_id = if org_name
-               CLIHelpers.resolve_org_id(base_url: base, token: token, name: org_name)
+               CLIHelpers.resolve_org_id(base_url: base, token:, name: org_name)
              else
-               CLIHelpers.auto_resolve_org_id(base_url: base, token: token)
+               CLIHelpers.auto_resolve_org_id(base_url: base, token:)
              end
 
-    @client = WorkflowClient.new(base_url: base, token: token, org_id: org_id)
+    @client = WorkflowClient.new(base_url: base, token:, org_id:)
   end
 
   def run
@@ -66,14 +66,16 @@ class QAReviewCLI
     csv = CSV.generate do |rows|
       rows << CSV_HEADERS
       findings.each do |f|
+        issue_notes = (f['issues'] || []).map { |i| i['message'] }.join('; ')
+        status = f['errors'].to_i > 0 ? 'FAIL' : 'WARN'
         rows << [
           f['provider'],
           f['pages'],
           f['category'],
-          f['dos'],
-          f['issues_notes'],
-          f['status'],
-          (f['time_ms'] / 60_000.0).round(2)
+          f['date'],
+          issue_notes,
+          status,
+          nil
         ]
       end
     end
@@ -170,12 +172,12 @@ if __FILE__ == $0
   CLIHelpers.run_with_error_handling do
     cli = QAReviewCLI.new(
       run_id,
-      output_path: output_path,
-      compact: compact,
-      format: format,
-      env: env,
+      output_path:,
+      compact:,
+      format:,
+      env:,
       base_url: base_url || url_base,
-      org_name: org_name
+      org_name:
     )
     cli.run
   end

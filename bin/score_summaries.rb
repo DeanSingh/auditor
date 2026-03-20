@@ -24,17 +24,17 @@ class ScoreSummariesCLI
     @compact = compact
     @errors_only = errors_only
 
-    config = AuditorConfig.new(env: env)
+    config = AuditorConfig.new(env:)
     base = base_url || config.base_url
     token = config.token!
 
     org_id = if org_name
-               CLIHelpers.resolve_org_id(base_url: base, token: token, name: org_name)
+               CLIHelpers.resolve_org_id(base_url: base, token:, name: org_name)
              else
-               CLIHelpers.auto_resolve_org_id(base_url: base, token: token)
+               CLIHelpers.auto_resolve_org_id(base_url: base, token:)
              end
 
-    @client = WorkflowClient.new(base_url: base, token: token, org_id: org_id)
+    @client = WorkflowClient.new(base_url: base, token:, org_id:)
   end
 
   def run
@@ -143,12 +143,12 @@ if __FILE__ == $0
   CLIHelpers.run_with_error_handling do
     cli = ScoreSummariesCLI.new(
       run_id,
-      output_path: output_path,
-      compact: compact,
-      errors_only: errors_only,
-      env: env,
+      output_path:,
+      compact:,
+      errors_only:,
+      env:,
       base_url: base_url || url_base,
-      org_name: org_name
+      org_name:
     )
     cli.run
   end

@@ -33,6 +33,7 @@ bin/
   test_inspect_run.rb         — Integration tests for inspect_run.rb CLI
   test_inspect_workflow.rb    — Integration tests for inspect_workflow.rb CLI
   test_score_summaries.rb     — Unit + integration tests for SummaryScorer and score_summaries.rb CLI
+  test_qa_review.rb           — Unit + integration tests for QAReviewer and qa_review.rb CLI
   test_toc_parsers.rb         — Tests for TOC parsing logic
 ```
 

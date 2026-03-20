@@ -53,7 +53,6 @@ class QAReviewer
     relevant_extracts.each do |extract|
       result = parse_result(extract['result'])
       extract_date = result&.dig('date').to_s.strip
-      source_text = extract_processed_content(extract['prompt'].to_s)
 
       next if extract_date.empty? || extract_date.downcase == 'unknown'
 
@@ -83,7 +82,7 @@ class QAReviewer
 
         issues << {
           check: 'dos_verification',
-          severity: 'warning',
+          severity: 'error',
           message: "Letter has unknown date but source text contains '#{dos_match}' on page #{extract['iteration'].to_i + 1}"
         }
         break # One warning per letter is sufficient
@@ -110,11 +109,17 @@ class QAReviewer
   end
 
   # Checks that letter content covers the key information from source pages.
+  #
+  # Known limitation: uses substring phrase matching, not semantic comparison.
+  # Extract Info often contains templated phrasing ("The patient was seen for
+  # follow-up") that gets condensed differently in summaries. Expect false
+  # positives — calibrate against real runs before treating as ground truth.
   def self.check_content_coverage(letter, page_extracts)
-    issues = []
     content = letter['content'] || ''
-    return issues if content.strip.empty?
-    return issues if page_extracts.empty?
+    return [] if content.strip.empty?
+    return [] if page_extracts.empty?
+
+    issues = []
 
     body = content.lines.drop(1).join.downcase
 
@@ -172,17 +177,19 @@ class QAReviewer
 
         next unless overlapping || similar
 
+        index_a = letter_a['index'] || i
+        index_b = letter_b['index'] || j
         pages_b_str = format_page_range(pages_b.to_a.sort)
         pages_a_str = format_page_range(pages_a.to_a.sort)
         provider_b = letter_b['provider'] || 'Unknown'
         provider_a = letter_a['provider'] || 'Unknown'
 
-        findings[i] ||= []
-        findings[i] << { check: 'redundancy', severity: 'warning',
-                         message: "Similar to letter at pages #{pages_b_str} (#{provider_b})" }
-        findings[j] ||= []
-        findings[j] << { check: 'redundancy', severity: 'warning',
-                         message: "Similar to letter at pages #{pages_a_str} (#{provider_a})" }
+        findings[index_a] ||= []
+        findings[index_a] << { check: 'redundancy', severity: 'warning',
+                               message: "Similar to letter at pages #{pages_b_str} (#{provider_b})" }
+        findings[index_b] ||= []
+        findings[index_b] << { check: 'redundancy', severity: 'warning',
+                               message: "Similar to letter at pages #{pages_a_str} (#{provider_a})" }
       end
     end
 
@@ -207,31 +214,33 @@ class QAReviewer
 
   # Checks provider availability claims against source data.
   def self.check_provider_availability(letter, page_extracts)
-    provider = letter['provider']
-    return [] unless provider.nil? || provider.strip.empty? || provider.strip.downcase == 'unknown'
+    return [] if provider_present?(letter['provider'])
 
-    has_provider_in_source = page_extracts.any? do |extract|
+    source_has_provider = page_extracts.any? do |extract|
       result = parse_result(extract['result'])
       next false unless result
 
-      p = result['provider']
-      p && !p.strip.empty? && p.strip.downcase != 'unknown'
+      provider_present?(result['provider'])
     end
 
-    return [] if has_provider_in_source
+    return [] if source_has_provider
 
     [{ check: 'provider_availability', severity: 'info',
        message: 'No provider name available for review' }]
   end
 
+  def self.provider_present?(value)
+    return false if value.nil?
+
+    stripped = value.strip
+    !stripped.empty? && stripped.downcase != 'unknown'
+  end
+
   # --- Helper methods ---
 
   def self.dates_match?(date_a, date_b)
-    begin
-      return true if Date.parse(date_a) == Date.parse(date_b)
-    rescue Date::Error
-      # Fall through to string comparison
-    end
+    Date.parse(date_a) == Date.parse(date_b)
+  rescue Date::Error
     normalize = ->(d) { d.to_s.gsub(',', '').strip.downcase }
     normalize.call(date_a) == normalize.call(date_b)
   end
@@ -371,8 +380,8 @@ class QAReviewer
 
   def find_extract_info_step_name(summary)
     steps = summary.dig('workflow', 'steps') || []
-    extract_step = steps.find { |s| s['name']&.match?(/extract info/i) }
-    extract_step ? extract_step['name'] : 'Extract Info'
+    match = steps.find { |s| s['name']&.match?(/extract info/i) }
+    match&.dig('name') || 'Extract Info'
   end
 
   def fetch_extract_info(run_id, step_name)
@@ -381,8 +390,12 @@ class QAReviewer
   end
 
   def letter_page_numbers(letter)
-    pages = letter['pages'] || []
-    pages.map { |p| p['pageNumber'].to_i }
+    (letter['pages'] || []).map { |p| p['pageNumber'].to_i }
+  end
+
+  # Converts internal symbol-keyed issue hashes to string-keyed output format.
+  def serialize_issues(issues)
+    issues.map { |i| { 'check' => i[:check], 'severity' => i[:severity], 'message' => i[:message] } }
   end
 
   def build_finding(letter, issues)
@@ -391,9 +404,10 @@ class QAReviewer
       'index' => letter['index'],
       'date' => letter['date'],
       'provider' => letter['provider'],
+      'category' => Array(letter['subcategory']).first || letter.dig('category', 0) || '',
       'pages' => self.class.format_page_range(page_nums),
       'page_count' => page_nums.length,
-      'issues' => issues.map { |i| { 'check' => i[:check], 'severity' => i[:severity], 'message' => i[:message] } },
+      'issues' => serialize_issues(issues),
       'errors' => issues.count { |i| i[:severity] == 'error' },
       'warnings' => issues.count { |i| i[:severity] == 'warning' }
     }
@@ -406,14 +420,14 @@ class QAReviewer
       existing = findings.find { |f| f['index'] == index }
       if existing
         redundancy_issues.each do |issue|
-          existing['issues'] << { 'check' => issue[:check], 'severity' => issue[:severity], 'message' => issue[:message] }
+          existing['issues'] << serialize_issues([issue]).first
           existing['errors'] += 1 if issue[:severity] == 'error'
           existing['warnings'] += 1 if issue[:severity] == 'warning'
         end
       else
         findings << {
           'index' => index,
-          'issues' => redundancy_issues.map { |i| { 'check' => i[:check], 'severity' => i[:severity], 'message' => i[:message] } },
+          'issues' => serialize_issues(redundancy_issues),
           'errors' => redundancy_issues.count { |i| i[:severity] == 'error' },
           'warnings' => redundancy_issues.count { |i| i[:severity] == 'warning' }
         }
