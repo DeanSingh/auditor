@@ -19,7 +19,7 @@ class QAReviewer
   DOS_WITH_DATE = /(?:date of service|(?<!\w)dos(?!\w)|encounter date|service date|exam date|visit date|appointment date|date of exam|date of visit|date of evaluation|evaluation date)[:\s]{0,10}(\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}|[A-Z][a-z]+\.?\s+\d{1,2},?\s+\d{4})/i.freeze
 
   METADATA_FIELDS = Set.new(%w[
-    date provider category subcategory pageNumber pageCount index id
+    date provider category subcategory doc_category pageNumber pageCount index id
   ]).freeze
 
   REDUNDANCY_THRESHOLD = 0.85
@@ -110,9 +110,46 @@ class QAReviewer
   end
 
   # Checks that letter content covers the key information from source pages.
-  # Stub — returns empty array until implemented.
-  def self.check_content_coverage(_letter, _extracts)
-    []
+  def self.check_content_coverage(letter, page_extracts)
+    issues = []
+    content = letter['content'] || ''
+    return issues if content.strip.empty?
+    return issues if page_extracts.empty?
+
+    body = content.lines.drop(1).join.downcase
+
+    page_extracts.each do |extract|
+      result = parse_result(extract['result'])
+      next unless result
+
+      page_num = (extract['iteration'] || 0) + 1
+      missing_fields = []
+
+      result.each do |field, value|
+        next if METADATA_FIELDS.include?(field)
+        next unless value.is_a?(String) && value.strip.length > 20
+
+        phrases = extract_significant_phrases(value)
+        next if phrases.empty?
+
+        found = phrases.any? { |phrase| body.include?(phrase.downcase) }
+        missing_fields << field unless found
+      end
+
+      unless missing_fields.empty?
+        issues << { check: 'content_coverage', severity: 'warning',
+                    message: "Content from page #{page_num} not reflected in summary: #{missing_fields.join(', ')}" }
+      end
+    end
+
+    issues
+  end
+
+  def self.extract_significant_phrases(text)
+    return [] if text.nil? || text.strip.empty?
+
+    phrases = text.split(/[.;:\n]+/).map(&:strip).reject(&:empty?)
+    phrases.select { |p| p.split(/\s+/).length >= 3 }
   end
 
   # Checks for redundant/duplicate content between letters.
