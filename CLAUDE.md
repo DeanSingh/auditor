@@ -15,6 +15,7 @@ lib/
   workflow_client.rb   — GraphQL HTTP client for Workflow Labs API
   cli_helpers.rb       — Shared CLI utilities (URL parsing, org resolution, error handling)
   summary_scorer.rb       — Medical Summary quality scoring engine (rubrics + checks)
+  qa_reviewer.rb          — Automated QA review engine (DOS, content coverage, redundancy, provider checks)
   page_comparison.rb   — Shared page comparison (fingerprinting, similarity, OCR extraction)
 
 bin/
@@ -22,6 +23,7 @@ bin/
   inspect_run.rb         — Inspects a workflow run (summary + drill-down into step executions)
   inspect_workflow.rb    — Lists workflows or shows full workflow detail (steps, prompts, config)
   score_summaries.rb     — Scores Medical Summary quality for all letters in a run
+  qa_review.rb             — Automated QA review for all letters in a run
   run_pipeline.rb        — Orchestrates the full vendor comparison pipeline (phases 1-4)
   simple_reconcile.rb    — TOC parsing and comparison (yours vs theirs)
   page_matcher.rb        — OCR-based page content matching
@@ -43,6 +45,7 @@ bin/
 - **Iteration filtering**: `--iterations` accepts ranges (`10-25`) or comma-separated lists (`10,13,14,21`). Comma-separated lists fetch the enclosing range from the API and filter client-side.
 - **Workflow inspection**: List mode finds workflows by name. Detail mode shows the full step pipeline with action configs (prompts, iterator settings, code templates).
 - **Summary scoring**: Rule-based quality checks on Medical Summary outputs. Checks header format compliance (per subcategory template), date/provider consistency between header and letter metadata, empty content detection, required section presence, and content length ratios. Supports both document-first and old-pipeline runs. Output is a JSON scorecard with per-letter pass/fail and aggregate stats.
+- **QA review**: Automated version of Xerses's manual QA process. Checks DOS verification (source page dates vs letter dates), content coverage (Extract Info findings reflected in summary), redundancy detection (overlapping pages or high text similarity), and provider data quality. Outputs JSON or CSV matching Xerses's QA log column format.
 
 ## Record Review Workflows
 
@@ -70,6 +73,7 @@ ruby bin/test_inspect_run.rb
 ruby bin/test_inspect_workflow.rb
 ruby bin/test_score_summaries.rb
 ruby bin/test_toc_parsers.rb
+ruby bin/test_qa_review.rb
 
 # List workflows / inspect a workflow
 bin/inspect_workflow.rb                                        # List all workflows
@@ -98,6 +102,12 @@ bin/score_summaries.rb <run_id>                           # Full scorecard (JSON
 bin/score_summaries.rb <run_id> --compact                  # Summary + flagged letters only
 bin/score_summaries.rb <run_id> --compact --errors-only    # Errors only (skip warnings)
 bin/score_summaries.rb <run_id> -o /tmp/scores.json        # Save to file
+
+# Automated QA review for a run
+bin/qa_review.rb <run_id>                               # Full JSON report
+bin/qa_review.rb <run_id> --compact                      # Flagged findings only
+bin/qa_review.rb <run_id> --format csv                   # CSV (Xerses's QA log format)
+bin/qa_review.rb <run_id> --format csv -o /tmp/qa.csv    # Save CSV to file
 
 # Run full vendor comparison pipeline
 bin/run_pipeline.rb --case "LastName_FirstName" <yours.docx> <theirs.pdf>

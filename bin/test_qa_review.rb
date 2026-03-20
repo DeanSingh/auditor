@@ -371,3 +371,107 @@ class TestQAReviewCLI < Minitest::Test
     end
   end
 end
+
+class TestQAReviewerEngine < Minitest::Test
+  def setup
+    @server = WEBrick::HTTPServer.new(
+      Port: 0,
+      Logger: WEBrick::Log.new('/dev/null'),
+      AccessLog: []
+    )
+    @port = @server[:Port]
+    @base_url = "http://127.0.0.1:#{@port}"
+    @server_thread = Thread.new { @server.start }
+  end
+
+  def teardown
+    @server.shutdown
+    @server_thread.join(2)
+  end
+
+  def test_review_document_first_run
+    mount_responses(
+      run_summary: {
+        'id' => '100', 'status' => 'SUCCEEDED',
+        'document' => { 'lettersCount' => 2, 'sourcePages' => { 'count' => 5 } },
+        'documentable' => true,
+        'workflow' => { 'name' => 'Record Review', 'steps' => [
+          { 'id' => '1', 'name' => 'Extract Info', 'kind' => 'PROMPT', 'priority' => 1 }
+        ] },
+        'executions' => [], 'stats' => {}
+      },
+      letters: [
+        { 'id' => '1', 'index' => 0, 'date' => 'January 15, 2021',
+          'provider' => 'J Smith, PhD', 'category' => ['Psych Records'],
+          'subcategory' => ['Reports by Psychologists'],
+          'pageCount' => 2, 'pages' => [{ 'pageNumber' => 1 }, { 'pageNumber' => 2 }],
+          'content' => "# Header\n\nPatient reports ongoing anxiety and depression." },
+        { 'id' => '2', 'index' => 1, 'date' => 'Unknown',
+          'provider' => nil, 'category' => ['Medical Records'],
+          'subcategory' => ['Progress Notes'],
+          'pageCount' => 1, 'pages' => [{ 'pageNumber' => 3 }],
+          'content' => "# Header\n\nBrief note." }
+      ],
+      extract_info: [
+        { 'iteration' => 0, 'status' => 'SUCCEEDED',
+          'result' => JSON.generate({ 'date' => 'January 15, 2021', 'provider' => 'J Smith, PhD' }),
+          'prompt' => '<processed_content>Patient seen on January 15 2021</processed_content>',
+          'output' => '', 'step' => { 'name' => 'Extract Info' }, 'started' => nil, 'finished' => nil },
+        { 'iteration' => 1, 'status' => 'SUCCEEDED',
+          'result' => JSON.generate({ 'date' => 'January 15, 2021', 'provider' => 'J Smith, PhD' }),
+          'prompt' => '<processed_content>Continuation of previous note</processed_content>',
+          'output' => '', 'step' => { 'name' => 'Extract Info' }, 'started' => nil, 'finished' => nil },
+        { 'iteration' => 2, 'status' => 'SUCCEEDED',
+          'result' => JSON.generate({ 'date' => 'Unknown', 'provider' => nil }),
+          'prompt' => '<processed_content>Date of Service: 03/01/2021\nProgress note.</processed_content>',
+          'output' => '', 'step' => { 'name' => 'Extract Info' }, 'started' => nil, 'finished' => nil }
+      ]
+    )
+
+    client = WorkflowClient.new(base_url: @base_url, token: 'test', org_id: 'org_1')
+    reviewer = QAReviewer.new(client: client)
+    result = reviewer.review('100')
+
+    assert_equal '100', result['run_id']
+    assert_equal 2, result['letters_reviewed']
+
+    # Letter 2 should have findings: Unknown date but DOS available, no provider
+    assert result['findings'].length >= 1, "Should have at least one flagged finding"
+    letter2_finding = result['findings'].find { |f| f['pages'] == '3' }
+    assert letter2_finding, "Letter 2 (page 3) should be flagged"
+    checks = letter2_finding['issues'].map { |i| i['check'] }
+    assert_includes checks, 'dos_verification', "Should flag DOS available in source: #{letter2_finding['issues']}"
+    assert_includes checks, 'provider_availability', "Should flag missing provider: #{letter2_finding['issues']}"
+  end
+
+  private
+
+  def mount_responses(run_summary:, letters:, extract_info:)
+    summary_response = { 'data' => { 'run' => run_summary } }
+
+    letters_response = {
+      'data' => { 'run' => { 'document' => { 'lettersCount' => letters.length, 'letters' => letters } } }
+    }
+
+    extract_response = {
+      'data' => { 'run' => { 'executions' => extract_info } }
+    }
+
+    @server.mount_proc('/graphql') do |req, res|
+      body = JSON.parse(req.body)
+      query = body['query']
+
+      result = if query.include?('ExecutionFilterInput')
+        extract_response
+      elsif query.include?('content')
+        letters_response
+      else
+        summary_response
+      end
+
+      res.status = 200
+      res['Content-Type'] = 'application/json'
+      res.body = JSON.generate(result)
+    end
+  end
+end
