@@ -16,10 +16,13 @@ require 'json'
 #   - Document-first runs: reads letters via document association
 #   - Old-pipeline runs: reconstructs letters from Medical Summary prompts
 class QAReviewer
-  DOS_WITH_DATE = /(?:date of service|(?<!\w)dos(?!\w)|encounter date|service date|exam date|visit date|appointment date|date of exam|date of visit|date of evaluation|evaluation date)[:\s]{0,10}(\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}|[A-Z][a-z]+\.?\s+\d{1,2},?\s+\d{4})/i.freeze
+  DOS_WITH_DATE = /(?:date of service|(?<!\w)dos(?!\w)|encounter date|service date|exam date|visit date|appointment date|appointment|date of exam|date of visit|date of evaluation|evaluation date)[:\s]{0,10}(\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}|[A-Z][a-z]+\.?\s+\d{1,2},?\s+\d{4})/i.freeze
 
   METADATA_FIELDS = Set.new(%w[
-    date provider category subcategory doc_category pageNumber pageCount index id
+    date date_type date_label provider category subcategory doc_category doc_subcategory
+    header footer content thoughts continuation continuation_type
+    claimant_match detected_patient_name detected_patient_dob
+    pageNumber pageCount index id page page_number filename
   ]).freeze
 
   REDUNDANCY_THRESHOLD = 0.85
@@ -212,21 +215,39 @@ class QAReviewer
     dot.to_f / (mag_a * mag_b)
   end
 
-  # Checks provider availability claims against source data.
+  # Checks provider availability — two modes:
+  #   1. Letter has no provider AND source has no provider → info (data quality note)
+  #   2. Letter has a provider but it doesn't appear in source page text → warning
+  #      (Xerses flags this as "No provider name available for review" — the provider
+  #      was inferred by AI but isn't visible to a human reading the source pages)
   def self.check_provider_availability(letter, page_extracts)
-    return [] if provider_present?(letter['provider'])
+    letter_provider = letter['provider']
 
-    source_has_provider = page_extracts.any? do |extract|
-      result = parse_result(extract['result'])
-      next false unless result
+    if !provider_present?(letter_provider)
+      # No provider in the letter — check if source also lacks one
+      source_has_provider = page_extracts.any? do |extract|
+        result = parse_result(extract['result'])
+        next false unless result
 
-      provider_present?(result['provider'])
+        provider_present?(result['provider'])
+      end
+
+      return [] if source_has_provider
+
+      return [{ check: 'provider_availability', severity: 'info',
+                message: 'No provider name available for review' }]
     end
 
-    return [] if source_has_provider
+    # Letter has a provider — verify it appears in source page text
+    provider_in_source = page_extracts.any? do |extract|
+      source_text = extract_processed_content(extract['prompt'].to_s)
+      source_text.downcase.include?(letter_provider.split(/[,\s]+/).first.downcase)
+    end
+
+    return [] if provider_in_source
 
     [{ check: 'provider_availability', severity: 'info',
-       message: 'No provider name available for review' }]
+       message: "Provider '#{letter_provider}' not found in source page text" }]
   end
 
   def self.provider_present?(value)
@@ -238,8 +259,15 @@ class QAReviewer
 
   # --- Helper methods ---
 
+  # Parses a date string, handling US slash format (M/D/YYYY) that Date.parse rejects.
+  def self.parse_date(str)
+    return Date.strptime(str, '%m/%d/%Y') if str.match?(%r{\A\d{1,2}/\d{1,2}/\d{4}\z})
+
+    Date.parse(str)
+  end
+
   def self.dates_match?(date_a, date_b)
-    Date.parse(date_a) == Date.parse(date_b)
+    parse_date(date_a) == parse_date(date_b)
   rescue Date::Error
     normalize = ->(d) { d.to_s.gsub(',', '').strip.downcase }
     normalize.call(date_a) == normalize.call(date_b)
@@ -367,8 +395,11 @@ class QAReviewer
       page_numbers = prompt.scan(/^-\s*Page:\s*(\d+)/i).flatten.map(&:to_i)
       pages = page_numbers.map { |n| { 'pageNumber' => n } }
 
-      date = prompt.match(/^Date:\s*([^\n]+)/)&.[](1)&.strip
-      provider = prompt.match(/^Provider:\s*([^\n]+)/)&.[](1)&.strip
+      # Try multiple date field patterns — old-pipeline prompts vary
+      date = prompt.match(/^Date:\s*([^\n]+)/m)&.[](1)&.strip ||
+             prompt.match(/^Encounter Date:\s*([^\n]+)/m)&.[](1)&.strip ||
+             prompt.match(/^Letter Date:\s*([^\n]+)/m)&.[](1)&.strip
+      provider = prompt.match(/^Provider:\s*([^\n]+)/m)&.[](1)&.strip
       subcategories = prompt.scan(/Sub-category:\s*(.+)/).flatten.map(&:strip).uniq
 
       {

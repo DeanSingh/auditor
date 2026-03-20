@@ -53,6 +53,13 @@ class TestQAReviewerDOS < Minitest::Test
     assert_empty issues
   end
 
+  def test_dos_us_slash_vs_iso_no_flag
+    letter = { 'date' => '2016-08-29', 'pages' => [{ 'pageNumber' => 1 }], 'content' => 'x' }
+    extracts = [make_extract(0, date: '8/29/2016')]
+    issues = QAReviewer.check_dos(letter, extracts)
+    assert_empty issues, "US slash date 8/29/2016 should match ISO 2016-08-29"
+  end
+
   def test_dos_empty_extracts_no_flag
     letter = { 'date' => 'January 15, 2021', 'pages' => [{ 'pageNumber' => 1 }], 'content' => 'x' }
     issues = QAReviewer.check_dos(letter, [])
@@ -171,21 +178,30 @@ class TestQAReviewerProviderAvailability < Minitest::Test
     assert_equal 'info', issues[0][:severity]
   end
 
-  def test_valid_provider_no_flag
+  def test_valid_provider_in_source_no_flag
     letter = { 'provider' => 'J Smith, MD', 'pages' => [{ 'pageNumber' => 1 }], 'content' => 'x' }
-    extracts = [make_extract(0, provider: 'J Smith, MD')]
+    extracts = [make_extract(0, provider: 'J Smith, MD', prompt: '<processed_content>Report by J Smith, MD</processed_content>')]
     issues = QAReviewer.check_provider_availability(letter, extracts)
     assert_empty issues
   end
 
+  def test_provider_not_in_source_text_flags_info
+    letter = { 'provider' => 'Victoria Lopez, FNP', 'pages' => [{ 'pageNumber' => 1 }], 'content' => 'x' }
+    extracts = [make_extract(0, provider: 'Victoria Lopez, FNP', prompt: '<processed_content>No provider visible on this page</processed_content>')]
+    issues = QAReviewer.check_provider_availability(letter, extracts)
+    assert_equal 1, issues.length
+    assert_equal 'info', issues[0][:severity]
+    assert_includes issues[0][:message], 'Victoria Lopez'
+  end
+
   private
 
-  def make_extract(iteration, provider: 'Unknown')
+  def make_extract(iteration, provider: 'Unknown', prompt: '')
     {
       'iteration' => iteration,
       'status' => 'SUCCEEDED',
       'result' => JSON.generate({ 'date' => 'January 15, 2021', 'provider' => provider }),
-      'prompt' => '', 'output' => '',
+      'prompt' => prompt, 'output' => '',
       'step' => { 'name' => 'Extract Info' }
     }
   end
