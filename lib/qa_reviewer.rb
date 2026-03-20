@@ -102,19 +102,22 @@ class QAReviewer
       end
     end
 
-    # Subcheck 3: source text has DOS-labeled dates that don't match letter date
+    # Subcheck 3: source text on FIRST page has DOS-labeled dates that don't match letter date.
+    # Only checks the first page — inner pages of multi-page letters often contain
+    # referenced dates from adjacent sessions (e.g., next appointment), not the
+    # current encounter date.
     unless unknown_letter
-      relevant_extracts.each do |extract|
-        source_text = extract_processed_content(extract['prompt'].to_s)
+      first_extract = relevant_extracts.min_by { |e| e['iteration'].to_i }
+      if first_extract
+        source_text = extract_processed_content(first_extract['prompt'].to_s)
         dos_match = find_dos_in_text(source_text)
-        next unless dos_match
-        next if dates_match?(letter_date, dos_match)
-
-        issues << {
-          check: 'dos_verification',
-          severity: 'error',
-          message: "Source text has DOS '#{dos_match}' that differs from letter date '#{letter_date}' on page #{extract['iteration'].to_i + 1}"
-        }
+        if dos_match && !dates_match?(letter_date, dos_match)
+          issues << {
+            check: 'dos_verification',
+            severity: 'error',
+            message: "Source text has DOS '#{dos_match}' that differs from letter date '#{letter_date}' on page #{first_extract['iteration'].to_i + 1}"
+          }
+        end
       end
     end
 
