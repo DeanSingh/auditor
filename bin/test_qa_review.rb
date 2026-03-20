@@ -132,6 +132,20 @@ class TestQAReviewerContentCoverage < Minitest::Test
     assert_empty issues, "Short field values (< 20 chars) should be skipped"
   end
 
+  def test_non_clinical_field_skipped
+    letter = {
+      'date' => 'January 15, 2021',
+      'pages' => [{ 'pageNumber' => 1 }],
+      'content' => "# Header\n\nUnrelated summary content here."
+    }
+    extracts = [make_extract(0, result: {
+      'thoughts' => 'This page appears to be a follow-up progress note with detailed findings',
+      'header' => 'Some long header text that definitely exceeds twenty characters'
+    })]
+    issues = QAReviewer.check_content_coverage(letter, extracts)
+    assert_empty issues, "Non-clinical fields like thoughts/header should be skipped"
+  end
+
   def test_empty_extracts_no_flag
     letter = { 'date' => 'January 15, 2021', 'pages' => [{ 'pageNumber' => 1 }], 'content' => "# Header\n\nContent." }
     issues = QAReviewer.check_content_coverage(letter, [])

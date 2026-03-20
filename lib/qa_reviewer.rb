@@ -18,6 +18,16 @@ require 'json'
 class QAReviewer
   DOS_WITH_DATE = /(?:date of service|(?<!\w)dos(?!\w)|encounter date|service date|exam date|visit date|appointment date|appointment|date of exam|date of visit|date of evaluation|evaluation date)[:\s]{0,10}(\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}|[A-Z][a-z]+\.?\s+\d{1,2},?\s+\d{4})/i.freeze
 
+  # Clinical fields to check for content coverage. Allowlist approach — only these
+  # fields are verified against the summary. New Extract Info fields are ignored
+  # until explicitly opted in, avoiding false positives from schema changes.
+  CLINICAL_FIELDS = Set.new(%w[
+    diagnosis findings procedures medications impression assessment
+    treatment symptoms complaints history_of_present_illness
+    functional_capacity restrictions work_status
+  ]).freeze
+
+  # Reference only — documents known Extract Info schema fields. Not used for filtering.
   METADATA_FIELDS = Set.new(%w[
     date date_type date_label provider category subcategory doc_category doc_subcategory
     header footer content thoughts continuation continuation_type
@@ -134,7 +144,7 @@ class QAReviewer
       missing_fields = []
 
       result.each do |field, value|
-        next if METADATA_FIELDS.include?(field)
+        next unless CLINICAL_FIELDS.include?(field)
         next unless value.is_a?(String) && value.strip.length > 20
 
         phrases = extract_significant_phrases(value)
