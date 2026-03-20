@@ -60,6 +60,15 @@ class TestQAReviewerDOS < Minitest::Test
     assert_empty issues, "US slash date 8/29/2016 should match ISO 2016-08-29"
   end
 
+  def test_dos_source_text_mismatch_flags_warning
+    letter = { 'date' => 'January 15, 2021', 'pages' => [{ 'pageNumber' => 1 }], 'content' => 'x' }
+    prompt = "<processed_content>\nDate of Service: 03/20/2021\nPatient seen.\n</processed_content>"
+    extracts = [make_extract(0, date: 'January 15, 2021', prompt: prompt)]
+    issues = QAReviewer.check_dos(letter, extracts)
+    assert_equal 1, issues.length
+    assert_equal 'warning', issues[0][:severity], "Source text DOS mismatch should be warning, not error"
+  end
+
   def test_dos_empty_extracts_no_flag
     letter = { 'date' => 'January 15, 2021', 'pages' => [{ 'pageNumber' => 1 }], 'content' => 'x' }
     issues = QAReviewer.check_dos(letter, [])

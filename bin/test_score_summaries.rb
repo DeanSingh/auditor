@@ -304,6 +304,12 @@ class TestSummaryScorerChecks < Minitest::Test
     assert_empty issues, "Chief Complaint should satisfy Subjective requirement"
   end
 
+  def test_required_sections_hpi_satisfies_subjective
+    content = "# Header\n\n**History of Present Illness:**\nPatient presents with low back pain.\n\n**Assessment:**\nStrain."
+    issues = SummaryScorer.check_required_sections(content, %w[Subjective Assessment])
+    assert_empty issues, "History of Present Illness should satisfy Subjective requirement"
+  end
+
   def test_required_sections_still_flags_when_truly_missing
     content = "# Header\n\nTreatment plan only. No SOAP sections."
     issues = SummaryScorer.check_required_sections(content, %w[Subjective Assessment])

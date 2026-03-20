@@ -35,7 +35,11 @@ class QAReviewer
     pageNumber pageCount index id page page_number filename
   ]).freeze
 
-  REDUNDANCY_THRESHOLD = 0.85
+  REDUNDANCY_THRESHOLD = 0.90
+  # Minimum unique characters each letter must have to suppress a redundancy flag.
+  # Medical records share boilerplate (medication lists, demographics) — if both
+  # letters still have substantial unique content, they're not truly redundant.
+  UNIQUE_CONTENT_MIN = 200
 
   # --- Class-level checks ---
   # Each returns an array of issue hashes: { check:, severity:, message: }
@@ -114,7 +118,7 @@ class QAReviewer
         if dos_match && !dates_match?(letter_date, dos_match)
           issues << {
             check: 'dos_verification',
-            severity: 'error',
+            severity: 'warning',
             message: "Source text has DOS '#{dos_match}' that differs from letter date '#{letter_date}' on page #{first_extract['iteration'].to_i + 1}"
           }
         end
@@ -190,6 +194,15 @@ class QAReviewer
         content_b = letter_b['content'] || ''
         similar = content_a.length > 50 && content_b.length > 50 &&
                   cosine_similarity(content_a, content_b) > REDUNDANCY_THRESHOLD
+
+        # Suppress if both letters have substantial unique content despite high similarity
+        if similar && !overlapping
+          words_a = Set.new(content_a.downcase.scan(/\w+/))
+          words_b = Set.new(content_b.downcase.scan(/\w+/))
+          unique_a = (words_a - words_b).sum { |w| w.length }
+          unique_b = (words_b - words_a).sum { |w| w.length }
+          similar = false if unique_a > UNIQUE_CONTENT_MIN && unique_b > UNIQUE_CONTENT_MIN
+        end
 
         next unless overlapping || similar
 

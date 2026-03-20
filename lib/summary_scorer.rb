@@ -320,7 +320,7 @@ class SummaryScorer
 
   SECTION_EQUIVALENTS = {
     'Assessment' => %w[Assessment Impression Diagnosis Diagnoses],
-    'Subjective' => %w[Subjective Chief\ Complaint HPI],
+    'Subjective' => %w[Subjective Chief\ Complaint HPI History\ of\ Present\ Illness],
     'Findings' => %w[Findings Results],
     'Conclusion' => %w[Conclusion Summary Interpretation],
     'Impairment' => %w[Impairment Disability WPI],
