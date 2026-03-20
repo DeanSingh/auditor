@@ -17,11 +17,12 @@ require_relative '../lib/summary_scorer'
 #   - Letter content may contain PHI — outputs to stdout only (no files unless -o)
 #   - Error messages are truncated to avoid leaking PHI
 class ScoreSummariesCLI
-  def initialize(run_id, output_path: nil, compact: false,
+  def initialize(run_id, output_path: nil, compact: false, errors_only: false,
                  env: nil, base_url: nil, org_name: nil)
     @run_id = run_id
     @output_path = output_path
     @compact = compact
+    @errors_only = errors_only
 
     config = AuditorConfig.new(env: env)
     base = base_url || config.base_url
@@ -39,6 +40,10 @@ class ScoreSummariesCLI
   def run
     scorer = SummaryScorer.new(client: @client)
     result = scorer.score(@run_id)
+
+    if @errors_only
+      result['flagged_letters'] = result['flagged_letters'].select { |l| l['errors'] > 0 }
+    end
 
     result.delete('letters') if @compact
 
@@ -62,6 +67,7 @@ end
 if __FILE__ == $0
   output_path = nil
   compact = false
+  errors_only = false
   env = nil
   base_url = nil
   org_name = nil
@@ -80,6 +86,10 @@ if __FILE__ == $0
 
     opts.on('--compact', 'Output summary + flagged letters only (omit full letters list)') do
       compact = true
+    end
+
+    opts.on('--errors-only', 'Only show letters with error-severity issues (skip warning-only)') do
+      errors_only = true
     end
 
     opts.on('--env ENV', 'Config environment: production (default) or local') do |e|
@@ -106,6 +116,7 @@ if __FILE__ == $0
       puts "  #{$0} 8564                                     # Full scorecard"
       puts "  #{$0} https://workflow.ing/dashboard/runs/8564  # From URL"
       puts "  #{$0} 8564 --compact                            # Summary + flagged only"
+      puts "  #{$0} 8564 --compact --errors-only               # Errors only (skip warnings)"
       puts "  #{$0} 8564 -o /tmp/scores.json                  # Save to file"
       puts "  #{$0} 8564 --org \"Acme Medical\""
       exit 0
@@ -134,6 +145,7 @@ if __FILE__ == $0
       run_id,
       output_path: output_path,
       compact: compact,
+      errors_only: errors_only,
       env: env,
       base_url: base_url || url_base,
       org_name: org_name

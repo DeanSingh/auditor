@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'date'
+
 # Scores Medical Summary outputs for quality and formatting compliance.
 #
 # Two modes:
@@ -93,6 +95,26 @@ class SummaryScorer
       header_shape: :claims,
       required_sections: [],
       content_type: :condensed
+    },
+    'Encounter Records and Scheduling Documentation' => {
+      header_shape: :standard_clinical,
+      required_sections: [],
+      content_type: :condensed
+    },
+    'Occupational Medicine Reports' => {
+      header_shape: :standard_clinical,
+      required_sections: [],
+      content_type: :condensed
+    },
+    'Radiology Reports' => {
+      header_shape: :imaging,
+      required_sections: %w[Findings Impression],
+      content_type: :condensed
+    },
+    'Legal Processing Forms' => {
+      header_shape: :claims,
+      required_sections: [],
+      content_type: :condensed
     }
   }.freeze
 
@@ -116,8 +138,16 @@ class SummaryScorer
     'Pathology' => 'Pathology Report',
     'RFA' => 'Request for Authorization',
     'Cover Letter' => 'Cover Letters and Position Statements',
-    'Deposition' => 'Depositions'
+    'Deposition' => 'Depositions',
+    'Encounter Records' => 'Encounter Records and Scheduling Documentation',
+    'Occupational Medicine' => 'Occupational Medicine Reports',
+    'Radiology' => 'Radiology Reports',
+    'DOT' => 'Occupational Medicine Reports'
   }.freeze
+
+  ORG_INDICATORS = /\b(LLC|LLP|Inc|Corp|Corporation|Administration|Department|City of|County of|Permanente|Associates|Foundation|University|Hospital|Medical Center|Clinic|Health\s+(?:System|Plan|Group)|Group|Services|Federal)\b/i.freeze
+
+  CREDENTIAL_PATTERN = /,?\s*\(?(?:MD|DO|DC|PhD|PsyD|LCSW|MFT|NP|PA|Esq\.?|Jr\.?|Sr\.?|III?|IV|D\.?C\.?|M\.?D\.?|D\.?O\.?)\)?\b/i.freeze
 
   def self.rubric_for(subcategory)
     subcategories = Array(subcategory)
@@ -194,17 +224,28 @@ class SummaryScorer
 
   def self.check_date_consistency(content, expected_date, header: nil)
     return [] if expected_date.nil? || expected_date.strip.empty?
+    return [] if expected_date.strip.downcase == 'unknown'
     header ||= extract_header(content)
     return [] if header.nil?
     header_date = parse_header_date(header)
     return [] if header_date.nil?
-    normalize = ->(d) { d.to_s.gsub(',', '').strip.downcase }
-    if normalize.call(header_date) != normalize.call(expected_date)
-      [{ check: 'date_consistency', severity: 'error',
-         message: "Header date '#{header_date}' does not match expected '#{expected_date}'" }]
-    else
-      []
+    return [] if header_date == 'Unknown'
+
+    # Try Date.parse to handle ISO (2016-08-29) vs human-readable (August 29, 2016)
+    begin
+      parsed_expected = Date.parse(expected_date)
+      parsed_header = Date.parse(header_date)
+      return [] if parsed_expected == parsed_header
+    rescue Date::Error
+      # Fall through to string comparison if parsing fails
     end
+
+    # String normalization fallback for partial or unusual date formats
+    normalize = ->(d) { d.to_s.gsub(',', '').strip.downcase }
+    return [] if normalize.call(header_date) == normalize.call(expected_date)
+
+    [{ check: 'date_consistency', severity: 'error',
+       message: "Header date '#{header_date}' does not match expected '#{expected_date}'" }]
   end
 
   def self.check_provider_consistency(content, expected_provider, header: nil)
@@ -213,20 +254,40 @@ class SummaryScorer
     return [] if header.nil?
     header_provider = parse_header_provider(header)
     return [] if header_provider.nil?
+
+    # Skip org-vs-person comparisons: Extract Info often captures the institution,
+    # but Medical Summary correctly writes the individual physician in the header.
+    return [] if likely_org?(expected_provider) && header_provider.match?(CREDENTIAL_PATTERN)
+
+    # Strip "to <Recipient>" suffix from cover letter providers before comparing
+    cleaned_expected = expected_provider.sub(/\s+to\s+.+$/i, '')
+
     normalize_name = lambda do |name|
-      cleaned = name.gsub(/,?\s*(MD|DO|PhD|PsyD|LCSW|MFT|NP|PA|Esq\.?|Jr\.?|Sr\.?|III?|IV)\b/i, '')
-      cleaned.strip.downcase
+      # Strip credentials: MD, DO, PhD, (M.D.), etc.
+      cleaned = name.gsub(CREDENTIAL_PATTERN, '')
+      # Normalize "LAST, FIRST MIDDLE" → "first middle last"
+      parts = cleaned.strip.split(/,\s*/, 2)
+      normalized = parts.length == 2 ? "#{parts[1]} #{parts[0]}" : parts[0]
+      normalized.strip.downcase.squeeze(' ')
     end
-    expected_norm = normalize_name.call(expected_provider)
+
+    expected_norm = normalize_name.call(cleaned_expected)
     header_norm = normalize_name.call(header_provider)
-    last_name_expected = expected_norm.split(/[\s,]+/).last
-    last_name_header = header_norm.split(/[\s,]+/).last
+
+    last_name_expected = expected_norm.split(/\s+/).last
+    last_name_header = header_norm.split(/\s+/).last
+
     if header_norm == expected_norm || last_name_header == last_name_expected
       []
     else
       [{ check: 'provider_consistency', severity: 'warning',
          message: "Header provider '#{header_provider}' does not match expected '#{expected_provider}'" }]
     end
+  end
+
+  def self.likely_org?(name)
+    return false if name.nil?
+    name.match?(ORG_INDICATORS)
   end
 
   def self.check_empty_content(content, page_count)
@@ -243,7 +304,10 @@ class SummaryScorer
     return [] if required_sections.empty?
     return [] if content.nil? || content.strip.empty?
     body ||= content.lines.drop(1).join
-    missing = required_sections.reject { |section| body.match?(/#{Regexp.escape(section)}/i) }
+    missing = required_sections.reject do |section|
+      equivalents = SECTION_EQUIVALENTS.fetch(section, [section])
+      equivalents.any? { |term| body.match?(/#{Regexp.escape(term)}/i) }
+    end
     if missing.any?
       [{ check: 'required_sections', severity: 'warning',
          message: "Missing expected sections: #{missing.join(', ')}" }]
@@ -253,6 +317,14 @@ class SummaryScorer
   end
 
   CHECK_NAMES = %w[header_format date_consistency provider_consistency empty_content required_sections content_length].freeze
+
+  SECTION_EQUIVALENTS = {
+    'Assessment' => %w[Assessment Impression Diagnosis Diagnoses],
+    'Subjective' => %w[Subjective Chief\ Complaint HPI],
+    'Findings' => %w[Findings Results],
+    'Conclusion' => %w[Conclusion Summary Interpretation],
+    'Impairment' => %w[Impairment Disability WPI],
+  }.freeze
 
   CHARS_PER_PAGE_THRESHOLD = 20
 

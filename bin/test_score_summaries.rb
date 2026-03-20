@@ -96,6 +96,22 @@ class TestSummaryScorerRubrics < Minitest::Test
     rubric = SummaryScorer.rubric_for(['Progress Notes and Reports by Treating Physicians', 'Other'])
     assert_equal :standard_clinical, rubric[:header_shape]
   end
+
+  def test_rubric_for_encounter_records_alias
+    rubric = SummaryScorer.rubric_for('Encounter Records')
+    assert_empty rubric[:required_sections], "Encounter records should have no required sections"
+  end
+
+  def test_rubric_for_radiology_reports
+    rubric = SummaryScorer.rubric_for('Radiology Reports')
+    assert_equal :imaging, rubric[:header_shape]
+    assert_includes rubric[:required_sections], 'Findings'
+  end
+
+  def test_rubric_for_occupational_medicine_via_dot_alias
+    rubric = SummaryScorer.rubric_for('DOT Physical')
+    assert_empty rubric[:required_sections]
+  end
 end
 
 class TestSummaryScorerChecks < Minitest::Test
@@ -159,6 +175,19 @@ class TestSummaryScorerChecks < Minitest::Test
     assert_empty issues
   end
 
+  def test_date_consistency_iso_vs_human_readable
+    content = "# [August 29, 2016, Medical Report - Provider]{.underline}\n\nContent."
+    issues = SummaryScorer.check_date_consistency(content, '2016-08-29')
+    assert_empty issues, "ISO and human-readable dates for the same day should match"
+  end
+
+  def test_date_consistency_actual_different_dates
+    content = "# [August 29, 2016, Medical Report - Provider]{.underline}\n\nContent."
+    issues = SummaryScorer.check_date_consistency(content, '2016-09-15')
+    assert_equal 1, issues.length
+    assert_equal 'error', issues[0][:severity]
+  end
+
   # --- check_provider_consistency ---
   def test_provider_consistency_match
     content = "# [January 15, 2021, Medical Report - J Smith, PhD]{.underline}\n\nContent."
@@ -192,6 +221,30 @@ class TestSummaryScorerChecks < Minitest::Test
     content = "# [June 1, 2021, Laboratory Report - Quest Diagnostics - Main Lab]{.underline}\n\nContent."
     issues = SummaryScorer.check_provider_consistency(content, 'Quest Diagnostics')
     assert_empty issues
+  end
+
+  def test_provider_consistency_org_vs_person_skipped
+    content = "# [August 29, 2016, Medical Report - Carlos Meza, MD]{.underline}\n\nContent."
+    issues = SummaryScorer.check_provider_consistency(content, 'KAISER PERMANENTE')
+    assert_empty issues, "Org-vs-person comparison should be skipped"
+  end
+
+  def test_provider_consistency_federal_org_vs_person_skipped
+    content = "# [March 1, 2020, Medical Report - Rick Harris, DC]{.underline}\n\nContent."
+    issues = SummaryScorer.check_provider_consistency(content, 'Federal Motor Carrier Safety Administration')
+    assert_empty issues
+  end
+
+  def test_provider_consistency_name_order_flip
+    content = "# [January 15, 2021, Medical Report - Rashmi Rekha Bhuyan, MD]{.underline}\n\nContent."
+    issues = SummaryScorer.check_provider_consistency(content, 'BHUYAN, RASHMI REKHA (M.D.)')
+    assert_empty issues, "Same person with different name order should match"
+  end
+
+  def test_provider_consistency_cover_letter_with_recipient
+    content = "# October 30, 2024, Cover Letter - Lenahan LLP to Yolanta Petrofsky, MD\n\nContent."
+    issues = SummaryScorer.check_provider_consistency(content, 'Lenahan LLP to Yolanta Petrofsky, MD')
+    assert_empty issues, "Cover letter 'to' suffix should be stripped before comparison"
   end
 
   # --- check_empty_content ---
@@ -231,6 +284,32 @@ class TestSummaryScorerChecks < Minitest::Test
   def test_required_sections_empty_list_ok
     issues = SummaryScorer.check_required_sections('Any content', [])
     assert_empty issues
+  end
+
+  def test_required_sections_impression_satisfies_assessment
+    content = "# Header\n\n**Subjective:**\nPain.\n\n**Impression:**\nLumbar strain."
+    issues = SummaryScorer.check_required_sections(content, %w[Subjective Assessment])
+    assert_empty issues, "Impression should satisfy Assessment requirement"
+  end
+
+  def test_required_sections_diagnosis_satisfies_assessment
+    content = "# Header\n\n**Subjective:**\nPain.\n\n**Diagnosis:**\nHerniated disc."
+    issues = SummaryScorer.check_required_sections(content, %w[Subjective Assessment])
+    assert_empty issues, "Diagnosis should satisfy Assessment requirement"
+  end
+
+  def test_required_sections_chief_complaint_satisfies_subjective
+    content = "# Header\n\n**Chief Complaint:**\nBack pain.\n\n**Assessment:**\nStrain."
+    issues = SummaryScorer.check_required_sections(content, %w[Subjective Assessment])
+    assert_empty issues, "Chief Complaint should satisfy Subjective requirement"
+  end
+
+  def test_required_sections_still_flags_when_truly_missing
+    content = "# Header\n\nTreatment plan only. No SOAP sections."
+    issues = SummaryScorer.check_required_sections(content, %w[Subjective Assessment])
+    assert_equal 1, issues.length
+    assert_includes issues[0][:message], 'Subjective'
+    assert_includes issues[0][:message], 'Assessment'
   end
 
   # --- check_content_length ---

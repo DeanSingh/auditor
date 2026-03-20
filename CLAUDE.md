@@ -96,6 +96,7 @@ bin/inspect_run.rb <run_id> -o /tmp/run.json                              # Save
 # Score Medical Summary quality for a run
 bin/score_summaries.rb <run_id>                           # Full scorecard (JSON)
 bin/score_summaries.rb <run_id> --compact                  # Summary + flagged letters only
+bin/score_summaries.rb <run_id> --compact --errors-only    # Errors only (skip warnings)
 bin/score_summaries.rb <run_id> -o /tmp/scores.json        # Save to file
 
 # Run full vendor comparison pipeline
